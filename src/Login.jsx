@@ -29,17 +29,21 @@ export default function Login({ onAuthed }) {
       const cleanEmail = email.trim().toLowerCase();
 
       if (mode === "signin") {
-        const { data, error } = await supabase.auth.signInWithPassword({
+        const { error } = await supabase.auth.signInWithPassword({
           email: cleanEmail,
           password,
         });
         if (error) throw error;
 
-        // IMPORTANT: tell App we now have a session (no reload needed)
-        if (data?.session) {
-          onAuthed?.(data.session);
+        // Always fetch the session after sign-in (more reliable than trusting returned data)
+        const { data: sessData, error: sessErr } = await supabase.auth.getSession();
+        if (sessErr) throw sessErr;
+
+        if (!sessData?.session) {
+          throw new Error("Signed in but no session found. Check Supabase client config.");
         }
 
+        onAuthed?.(sessData.session);
         setMsg("Signed in.");
       }
 
@@ -72,6 +76,7 @@ export default function Login({ onAuthed }) {
           redirectTo: window.location.origin,
         });
         if (error) throw error;
+
         setMsg("Password reset email sent. Check your inbox.");
       }
     } catch (e2) {
@@ -152,7 +157,8 @@ export default function Login({ onAuthed }) {
         </form>
 
         <p style={styles.help}>
-          Tip: If sign up says “check your email”, confirm the email first, then come back and sign in.
+          Tip: If sign up says “check your email”, confirm the email first, then
+          come back and sign in.
         </p>
       </div>
     </div>

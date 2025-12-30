@@ -33,6 +33,10 @@ export default function App() {
 
   if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
 
+<div style={{ padding: 8, fontSize: 12, color: "#666" }}>
+  Session: {session ? "YES" : "NO"}
+</div>
+
   if (!session) {
     return <Login onAuthed={(s) => setSession(s)} />;
   }
