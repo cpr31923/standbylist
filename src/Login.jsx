@@ -24,11 +24,12 @@ export default function Login() {
 
     try {
       if (!email) throw new Error("Please enter an email.");
+        if (mode !== "reset" && !password) throw new Error("Please enter a password.");
+
         const cleanEmail = email.trim().toLowerCase();
-      if (mode !== "reset" && !password) throw new Error("Please enter a password.");
 
       if (mode === "signin") {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
         if (error) throw error;
         setMsg("Signed in.");
         window.location.reload();
@@ -36,12 +37,12 @@ export default function Login() {
 
     if (mode === "signup") {
       const { data, error } = await supabase.auth.signUp({
-        email,
+        email: cleanEmail,
         password,
         options: {
           emailRedirectTo: window.location.origin,
         },
-      });
+    });
 
       if (error) {
         // Friendly errors
@@ -62,7 +63,7 @@ export default function Login() {
     }
 
       if (mode === "reset") {
-        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
           redirectTo: window.location.origin,
         });
         if (error) throw error;
