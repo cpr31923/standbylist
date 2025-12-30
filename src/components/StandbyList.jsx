@@ -8,6 +8,7 @@ import { supabase } from "../supabaseClient";
  * - user_id (uuid)
  * - person_name (text)
  * - platoon (text, nullable)
+ * - duty_platoon (text, nullable)
  * - shift_date (date)  // YYYY-MM-DD
  * - shift_type (text)  // "Day" | "Night"
  * - worked_for_me (bool)   TRUE: I owe them. FALSE: they owe me.
@@ -180,8 +181,37 @@ export default function StandbyList() {
   }, []);
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
+  // 1) Try the official path first
+  const { error } = await supabase.auth.signOut(); // (no scope)
+  if (!error) return;
+
+  // 2) If Supabase refuses logout (403), force local sign-out
+  console.warn("Supabase signOut failed, forcing local clear:", error);
+
+  try {
+    // Remove common Supabase auth keys (covers most SPA setups)
+    const keys = Object.keys(localStorage);
+    for (const k of keys) {
+      // supabase-js typically uses sb-<project-ref>-auth-token
+      if (k.startsWith("sb-") && k.includes("auth")) localStorage.removeItem(k);
+    }
+
+    const skeys = Object.keys(sessionStorage);
+    for (const k of skeys) {
+      if (k.startsWith("sb-") && k.includes("auth")) sessionStorage.removeItem(k);
+    }
+  } catch (e) {
+    console.warn("Local/session storage clear failed:", e);
   }
+
+  // Clear React state so UI updates instantly
+  setSession(null);
+  setUser(null);
+
+  // Hard reload so supabase-js can’t keep an in-memory session alive
+  window.location.reload();
+  }
+
 
   // -----------------------------
   // Scroll lock when modal open
@@ -302,7 +332,6 @@ export default function StandbyList() {
       } else if (tab === "upcoming") {
         // future shifts you are working for someone
         query = query.eq("worked_for_me", false).gt("shift_date", todayYMD());
-        // include settled and unsettled
       } else if (tab === "history" && historySubtab === "settled") {
         query = query.eq("settled", true);
       }
@@ -346,17 +375,13 @@ export default function StandbyList() {
       p_shift_type: shiftType,
     });
 
-    if (error) {
-      // silent fail; roster may not be configured yet
-      return;
-    }
+    if (error) return;
 
     if (data) {
       setForm((f) => ({ ...f, duty_platoon: String(data) }));
     }
   }
 
-  // when add form date/type changes, auto populate platoon (unless user typed it)
   useEffect(() => {
     if (!showAddModal) return;
     maybeAutofillPlatoon(form.shift_date, form.shift_type);
@@ -545,7 +570,6 @@ export default function StandbyList() {
       return;
     }
 
-    // If it was settled with another, "unsettle" the partner by clearing settlement fields
     if (row?.settlement_group_id) {
       const { data: others, error: otherErr } = await supabase
         .from("standby_events")
@@ -671,19 +695,18 @@ export default function StandbyList() {
 
     const updates = {
       person_name: editForm.person_name.trim(),
-      platoon: editForm.platoon.trim() || null, // their normal platoon
+      platoon: editForm.platoon.trim() || null,
       shift_date: editForm.shift_date || null,
       shift_type: (editForm.shift_type || "").trim() || null,
       notes: editForm.notes.trim() || null,
       worked_for_me: Boolean(editForm.worked_for_me),
-      duty_platoon: null, // will be recomputed below
+      duty_platoon: null,
     };
 
     if (!updates.person_name) return alert("Please enter a name.");
     if (!updates.shift_date) return alert("Please select a date.");
     if (!updates.shift_type) return alert("Please select Day or Night.");
 
-    // recompute duty platoon from roster
     try {
       const { data: dutyData, error: dutyErr } = await supabase.rpc("get_platoon_on_duty", {
         p_date: updates.shift_date,
@@ -694,7 +717,7 @@ export default function StandbyList() {
         updates.duty_platoon = String(dutyData);
       }
     } catch (err) {
-      // silent fail — roster might not exist yet
+      // silent fail
     }
 
     const { data, error } = await supabase
@@ -942,7 +965,6 @@ export default function StandbyList() {
 
     const title = titleLabel();
 
-    // History → Settled grouped view
     if (tab === "history" && historySubtab === "settled") {
       const groups = historyGroups;
       const count = standbys.length;
@@ -995,7 +1017,6 @@ export default function StandbyList() {
       );
     }
 
-    // History → Deleted list view + all other tabs list view
     const rows = viewRows;
     const count = rows.length;
 
@@ -1244,11 +1265,11 @@ export default function StandbyList() {
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="mx-auto max-w-xl px-4 pt-6 pb-28">
-        {/* Tight header */}
+        {/* Tight header (single header only) */}
         <div className="mb-4 rounded-3xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-lg font-extrabold text-slate-900 leading-tight">Standby Me</div>
+              <div className="text-lg font-extrabold text-slate-900 leading-tight">Standby Ledger</div>
               <div className="text-xs text-slate-500 truncate mt-0.5">{emailLabel}</div>
             </div>
 
@@ -1330,11 +1351,7 @@ export default function StandbyList() {
               </div>
             </div>
 
-            <InputField
-              label="Name"
-              value={form.person_name}
-              onChange={(v) => setForm((f) => ({ ...f, person_name: v }))}
-            />
+            <InputField label="Name" value={form.person_name} onChange={(v) => setForm((f) => ({ ...f, person_name: v }))} />
 
             <InputField
               label="What Platoon is this person on?"
@@ -1381,11 +1398,7 @@ export default function StandbyList() {
               </div>
             </div>
 
-            <TextAreaField
-              label="Notes (optional)"
-              value={form.notes}
-              onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
-            />
+            <TextAreaField label="Notes (optional)" value={form.notes} onChange={(v) => setForm((f) => ({ ...f, notes: v }))} />
 
             <label className="flex items-start gap-3 text-sm text-slate-800">
               <input
@@ -1459,7 +1472,11 @@ export default function StandbyList() {
             </div>
           ) : (
             <div className="space-y-4">
-              <InputField label="Name" value={editForm.person_name} onChange={(v) => setEditForm((f) => ({ ...f, person_name: v }))} />
+              <InputField
+                label="Name"
+                value={editForm.person_name}
+                onChange={(v) => setEditForm((f) => ({ ...f, person_name: v }))}
+              />
               <InputField
                 label="What Platoon is this person on?"
                 value={editForm.platoon}
@@ -1485,7 +1502,11 @@ export default function StandbyList() {
                 </select>
                 <div className="mt-1 text-xs text-slate-500">Shift type</div>
               </div>
-              <TextAreaField label="Notes (optional)" value={editForm.notes} onChange={(v) => setEditForm((f) => ({ ...f, notes: v }))} />
+              <TextAreaField
+                label="Notes (optional)"
+                value={editForm.notes}
+                onChange={(v) => setEditForm((f) => ({ ...f, notes: v }))}
+              />
               <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm font-extrabold text-slate-900 mb-2">Shift direction</div>
                 <div className="space-y-2">
@@ -1591,6 +1612,7 @@ export default function StandbyList() {
                     setEditForm({
                       person_name: selectedStandby.person_name || "",
                       platoon: selectedStandby.platoon || "",
+                      duty_platoon: selectedStandby.duty_platoon || "",
                       shift_date: selectedStandby.shift_date || "",
                       shift_type: selectedStandby.shift_type || "Day",
                       notes: selectedStandby.notes || "",

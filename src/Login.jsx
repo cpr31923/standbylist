@@ -81,19 +81,8 @@ export default function Login() {
   return (
     <div style={styles.wrap}>
       <div style={styles.card}>
-        <h1 style={styles.title}>Standby Me</h1>
+        <h1 style={styles.title}>Standby Ledger</h1>
 
-        {/* Debug line so we can SEE what Login/Supabase sees */}
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
-          Login sees session: <b>{debugSession}</b>
-          <button
-            type="button"
-            onClick={refreshDebugSession}
-            style={{ marginLeft: 10, fontSize: 12 }}
-          >
-            Refresh
-          </button>
-        </div>
 
         <div style={styles.tabs}>
           <button
