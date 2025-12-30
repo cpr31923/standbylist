@@ -31,6 +31,7 @@ export default function Login() {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         setMsg("Signed in.");
+        window.location.reload();
       }
 
     if (mode === "signup") {
@@ -77,7 +78,7 @@ export default function Login() {
   return (
     <div style={styles.wrap}>
       <div style={styles.card}>
-        <h1 style={styles.title}>StandbyList</h1>
+        <h1 style={styles.title}>Standby Me</h1>
 
         <div style={styles.tabs}>
           <button
