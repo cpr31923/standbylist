@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 
-export default function Login() {
+export default function Login({ onAuthed }) {
   const [mode, setMode] = useState("signin"); // signin | signup | reset
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,43 +24,48 @@ export default function Login() {
 
     try {
       if (!email) throw new Error("Please enter an email.");
-        if (mode !== "reset" && !password) throw new Error("Please enter a password.");
+      if (mode !== "reset" && !password) throw new Error("Please enter a password.");
 
-        const cleanEmail = email.trim().toLowerCase();
+      const cleanEmail = email.trim().toLowerCase();
 
       if (mode === "signin") {
-        const { error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password,
+        });
         if (error) throw error;
-        setMsg("Signed in.");
-        window.location.reload();
-      }
 
-    if (mode === "signup") {
-      const { data, error } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password,
-        options: {
-          emailRedirectTo: window.location.origin,
-        },
-    });
-
-      if (error) {
-        // Friendly errors
-        if (
-          error.message?.toLowerCase().includes("already registered") ||
-          error.message?.toLowerCase().includes("already exists")
-        ) {
-          throw new Error("An account with this email already exists. Try signing in.");
+        // IMPORTANT: tell App we now have a session (no reload needed)
+        if (data?.session) {
+          onAuthed?.(data.session);
         }
-        throw error;
+
+        setMsg("Signed in.");
       }
 
-      if (data?.session) {
-        setMsg("Account created and signed in.");
-      } else {
-        setMsg("Account created. Check your email to confirm, then sign in.");
+      if (mode === "signup") {
+        const { data, error } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password,
+          options: {
+            emailRedirectTo: window.location.origin,
+          },
+        });
+
+        if (error) throw error;
+
+        // If confirmations are OFF, you may get a session immediately
+        if (data?.session) {
+          onAuthed?.(data.session);
+          setMsg("Account created and signed in.");
+        } else {
+          // If confirmations are ON (or email exists and Supabase avoids enumerating),
+          // you might not get a session here.
+          setMsg(
+            "If this email is new, check your inbox to confirm your account. If you already have an account, use Sign in or Forgot password."
+          );
+        }
       }
-    }
 
       if (mode === "reset") {
         const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {

@@ -9,33 +9,33 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
+    let alive = true;
 
-    async function init() {
-      try {
-        const { data, error } = await supabase.auth.getSession();
-        if (error) console.error("getSession error:", error);
-        if (!cancelled) setSession(data?.session ?? null);
-      } catch (e) {
-        console.error("init auth error:", e);
-      } finally {
-        if (!cancelled) setLoading(false);
+    // Initial load (for refreshes)
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) console.error("getSession error:", error);
+      if (alive) {
+        setSession(data?.session ?? null);
+        setLoading(false);
       }
-    }
+    });
 
-    init();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    // Backup listener
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
     });
 
     return () => {
-      cancelled = true;
-      authListener?.subscription?.unsubscribe?.();
+      alive = false;
+      sub?.subscription?.unsubscribe?.();
     };
   }, []);
 
   if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
-  if (!session) return <Login />;
+
+  if (!session) {
+    return <Login onAuthed={(s) => setSession(s)} />;
+  }
+
   return <StandbyList />;
 }
