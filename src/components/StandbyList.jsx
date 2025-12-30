@@ -1,4 +1,4 @@
-// StandbyList.jsx
+// src/components/StandbyList.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient";
 
@@ -29,7 +29,7 @@ function todayYMD() {
 }
 
 function isFuture(ymd) {
-  if (!ymd) return false;
+  if (!ymd) return true;
   return String(ymd) > todayYMD();
 }
 
@@ -55,6 +55,15 @@ function normalizeName(s) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ");
+}
+
+function toTitleCase(s) {
+  const raw = String(s || "").trim().replace(/\s+/g, " ");
+  if (!raw) return "";
+  return raw
+    .split(" ")
+    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
+    .join(" ");
 }
 
 function makeUUID() {
@@ -87,9 +96,22 @@ export default function StandbyList() {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
 
-  // Primary nav tabs
-  const [tab, setTab] = useState("owed"); // owed | owe | upcoming | history
+  // Drawer / navigation
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Collapsible groups in drawer
+  const [drawerGroup, setDrawerGroup] = useState("standbys"); // standbys | upcoming | history (which is expanded)
+
+  // Top-level section
+  const [section, setSection] = useState("standbys"); // standbys | upcoming | history
+
+  // Sub-tabs
+  const [standbysSubtab, setStandbysSubtab] = useState("owed"); // owed | owe
+  const [upcomingSubtab, setUpcomingSubtab] = useState("i_work"); // i_work | they_work
   const [historySubtab, setHistorySubtab] = useState("settled"); // settled | deleted
+
+  // Filters UI
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const [standbys, setStandbys] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -98,17 +120,20 @@ export default function StandbyList() {
   const [selectedStandby, setSelectedStandby] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
 
+  // Filters
+  const [searchText, setSearchText] = useState("");
+  const [sortMode, setSortMode] = useState("date_desc");
+  const [platoonFilter, setPlatoonFilter] = useState("");
+
+  // Name suggestions
+  const [nameSuggestions, setNameSuggestions] = useState([]);
+
   // Settle flow in detail modal
   const [settleFlowOpen, setSettleFlowOpen] = useState(false);
   const [settleChoice, setSettleChoice] = useState(null); // null | "new" | "existing"
   const [settleWithExistingId, setSettleWithExistingId] = useState(null);
   const [oppositeCandidates, setOppositeCandidates] = useState([]);
   const [loadingOpposite, setLoadingOpposite] = useState(false);
-
-  // Search/filter/sort
-  const [searchText, setSearchText] = useState("");
-  const [sortMode, setSortMode] = useState("date_desc"); // date_desc | date_asc | name_az | name_za | platoon_az | platoon_za
-  const [platoonFilter, setPlatoonFilter] = useState(""); // "" = all
 
   // Name mismatch resolution
   const [mismatchResolution, setMismatchResolution] = useState(""); // "" | "threeway" | "same"
@@ -117,8 +142,8 @@ export default function StandbyList() {
   const [form, setForm] = useState({
     worked_for_me: false,
     person_name: "",
-    platoon: "", // their home platoon (manual)
-    duty_platoon: "", // the platoon you’re working on (auto)
+    platoon: "",
+    duty_platoon: "",
     shift_date: "",
     shift_type: "Day",
     notes: "",
@@ -126,8 +151,8 @@ export default function StandbyList() {
     settle_with_existing_id: null,
   });
 
-  // Track whether platoon was manually overridden (so auto-fill doesn’t fight user)
-  const platoonManualRef = useRef(false);
+  // Prevent auto-fill fighting the user
+  const dutyPlatoonManualRef = useRef(false);
 
   // Edit form
   const [isEditing, setIsEditing] = useState(false);
@@ -144,7 +169,7 @@ export default function StandbyList() {
   const [refreshTick, setRefreshTick] = useState(0);
 
   // -----------------------------
-  // AUTH (single source of truth)
+  // AUTH
   // -----------------------------
   useEffect(() => {
     let mounted = true;
@@ -181,43 +206,34 @@ export default function StandbyList() {
   }, []);
 
   async function handleSignOut() {
-  // 1) Try the official path first
-  const { error } = await supabase.auth.signOut(); // (no scope)
-  if (!error) return;
+    const { error } = await supabase.auth.signOut();
+    if (!error) return;
 
-  // 2) If Supabase refuses logout (403), force local sign-out
-  console.warn("Supabase signOut failed, forcing local clear:", error);
+    console.warn("Supabase signOut failed, forcing local clear:", error);
 
-  try {
-    // Remove common Supabase auth keys (covers most SPA setups)
-    const keys = Object.keys(localStorage);
-    for (const k of keys) {
-      // supabase-js typically uses sb-<project-ref>-auth-token
-      if (k.startsWith("sb-") && k.includes("auth")) localStorage.removeItem(k);
+    try {
+      const keys = Object.keys(localStorage);
+      for (const k of keys) {
+        if (k.startsWith("sb-") && k.includes("auth")) localStorage.removeItem(k);
+      }
+      const skeys = Object.keys(sessionStorage);
+      for (const k of skeys) {
+        if (k.startsWith("sb-") && k.includes("auth")) sessionStorage.removeItem(k);
+      }
+    } catch (e) {
+      console.warn("Local/session storage clear failed:", e);
     }
 
-    const skeys = Object.keys(sessionStorage);
-    for (const k of skeys) {
-      if (k.startsWith("sb-") && k.includes("auth")) sessionStorage.removeItem(k);
-    }
-  } catch (e) {
-    console.warn("Local/session storage clear failed:", e);
+    setSession(null);
+    setUser(null);
+    window.location.reload();
   }
-
-  // Clear React state so UI updates instantly
-  setSession(null);
-  setUser(null);
-
-  // Hard reload so supabase-js can’t keep an in-memory session alive
-  window.location.reload();
-  }
-
 
   // -----------------------------
   // Scroll lock when modal open
   // -----------------------------
   useEffect(() => {
-    const anyModalOpen = showAddModal || Boolean(selectedStandby);
+    const anyModalOpen = showAddModal || Boolean(selectedStandby) || drawerOpen;
     if (!anyModalOpen) return;
 
     const prev = document.body.style.overflow;
@@ -225,7 +241,7 @@ export default function StandbyList() {
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [showAddModal, selectedStandby]);
+  }, [showAddModal, selectedStandby, drawerOpen]);
 
   function resetOverlays() {
     setSelectedStandby(null);
@@ -239,18 +255,54 @@ export default function StandbyList() {
     setMismatchResolution("");
   }
 
-  function goTab(nextTab) {
-    resetOverlays();
-    setTab(nextTab);
+  // -----------------------------
+  // Navigation helpers (ALWAYS closes drawer)
+  // -----------------------------
+  function clearFiltersForNav(nextSection) {
     setSearchText("");
-    setSortMode("date_desc");
     setPlatoonFilter("");
+    setFiltersOpen(false);
+    setSortMode(nextSection === "upcoming" ? "date_asc" : "date_desc");
+  }
+
+  function goStandbys(which) {
+    resetOverlays();
+    setSection("standbys");
+    setDrawerGroup("standbys");
+    setStandbysSubtab(which);
+    clearFiltersForNav("standbys");
+    setDrawerOpen(false);
+  }
+
+  function goUpcoming(which) {
+    resetOverlays();
+    setSection("upcoming");
+    setDrawerGroup("upcoming");
+    setUpcomingSubtab(which);
+    clearFiltersForNav("upcoming");
+    setDrawerOpen(false);
+  }
+
+  function goHistory(which) {
+    resetOverlays();
+    setSection("history");
+    setDrawerGroup("history");
+    setHistorySubtab(which);
+    clearFiltersForNav("history");
+    setDrawerOpen(false);
   }
 
   function statusText(s) {
     if (s.deleted_at) return "Deleted";
     if (s.settled) return "Settled";
-    return "Active";
+    return "Unsettled";
+  }
+
+  function shiftSummaryForDuty(shiftType, dutyPlatoon, dateYMD) {
+    const tense = isFuture(dateYMD) ? "will be" : "was";
+    const sp = dutyPlatoon ? formatPlatoonLabel(dutyPlatoon) : "—";
+    const st = shiftType ? String(shiftType) : "—";
+    return `This shift ${tense} a: ${sp} ${st.toLowerCase()} shift`;
   }
 
   function detailNarrative(s) {
@@ -261,11 +313,20 @@ export default function StandbyList() {
     const stPart = st ? ` ${st}` : "";
     const future = isFuture(s?.shift_date);
 
+    // NOTE CONTINUED: settled + upcoming wording
+    if (s?.settled && future) {
+      if (s?.worked_for_me) {
+        return `Once ${name} works for you on ${date}${stPart}, your shifts will be settled.`;
+      }
+      return `Once you work for ${name} on ${date}${stPart}, your shifts will be settled.`;
+    }
+
     if (s?.worked_for_me) {
       if (future)
         return `${name} (${platoon}) will work for you on ${date}${stPart}. You will owe them a shift.`;
       return `${name} (${platoon}) worked for you on ${date}${stPart}. You owe them a shift.`;
     }
+
     if (future)
       return `You will work for ${name} (${platoon}) on ${date}${stPart}. They will owe you a shift.`;
     return `You worked for ${name} (${platoon}) on ${date}${stPart}. They owe you a shift.`;
@@ -293,16 +354,7 @@ export default function StandbyList() {
   }, [selectedStandby]);
 
   // -----------------------------
-  // Upcoming default sort: oldest first
-  // -----------------------------
-  useEffect(() => {
-    if (tab === "upcoming") setSortMode("date_asc");
-    if (tab !== "upcoming" && sortMode === "date_asc") setSortMode("date_desc");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
-
-  // -----------------------------
-  // Fetch standbys
+  // Fetch standbys (by section/subtab)
   // -----------------------------
   useEffect(() => {
     if (!user?.id) {
@@ -318,32 +370,38 @@ export default function StandbyList() {
 
       let query = supabase.from("standby_events").select("*").eq("user_id", user.id);
 
-      // common: exclude deleted unless historySubtab=deleted
-      if (tab === "history" && historySubtab === "deleted") {
+      // deleted vs not deleted
+      if (section === "history" && historySubtab === "deleted") {
         query = query.not("deleted_at", "is", null);
       } else {
         query = query.is("deleted_at", null);
       }
 
-      if (tab === "owed") {
-        query = query.eq("settled", false).eq("worked_for_me", false);
-      } else if (tab === "owe") {
-        query = query.eq("settled", false).eq("worked_for_me", true);
-      } else if (tab === "upcoming") {
-        // future shifts you are working for someone
-        query = query.eq("worked_for_me", false).gt("shift_date", todayYMD());
-      } else if (tab === "history" && historySubtab === "settled") {
+      // STANDBYS
+      if (section === "standbys") {
+        if (standbysSubtab === "owed") query = query.eq("settled", false).eq("worked_for_me", false);
+        if (standbysSubtab === "owe") query = query.eq("settled", false).eq("worked_for_me", true);
+      }
+
+      // UPCOMING
+      if (section === "upcoming") {
+        if (upcomingSubtab === "i_work") query = query.eq("worked_for_me", false).gt("shift_date", todayYMD());
+        if (upcomingSubtab === "they_work") query = query.eq("worked_for_me", true).gt("shift_date", todayYMD());
+      }
+
+      // HISTORY (settled)
+      if (section === "history" && historySubtab === "settled") {
         query = query.eq("settled", true);
       }
 
       const orderCol =
-        tab === "history" && historySubtab === "deleted"
+        section === "history" && historySubtab === "deleted"
           ? "deleted_at"
-          : tab === "history" && historySubtab === "settled"
+          : section === "history" && historySubtab === "settled"
           ? "settled_at"
           : "shift_date";
 
-      const ascending = tab === "upcoming"; // upcoming should read in chronological order
+      const ascending = section === "upcoming";
       const { data, error } = await query.order(orderCol, { ascending });
 
       if (error) {
@@ -361,14 +419,14 @@ export default function StandbyList() {
     }
 
     fetchStandbys();
-  }, [tab, historySubtab, user?.id, refreshTick]);
+  }, [section, standbysSubtab, upcomingSubtab, historySubtab, user?.id, refreshTick]);
 
   // -----------------------------
   // Platoon auto-fill from roster function
   // -----------------------------
   async function maybeAutofillPlatoon(dateYMD, shiftType) {
     if (!dateYMD || !shiftType) return;
-    if (platoonManualRef.current) return;
+    if (dutyPlatoonManualRef.current) return;
 
     const { data, error } = await supabase.rpc("get_platoon_on_duty", {
       p_date: dateYMD,
@@ -387,6 +445,33 @@ export default function StandbyList() {
     maybeAutofillPlatoon(form.shift_date, form.shift_type);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAddModal, form.shift_date, form.shift_type]);
+
+  // -----------------------------
+  // Name suggestions
+  // -----------------------------
+  async function fetchNameSuggestions() {
+    if (!user?.id) return;
+
+    const { data, error } = await supabase
+      .from("standby_events")
+      .select("person_name")
+      .eq("user_id", user.id)
+      .is("deleted_at", null)
+      .order("shift_date", { ascending: false })
+      .limit(300);
+
+    if (error) {
+      console.warn("Could not load name suggestions:", error);
+      return;
+    }
+
+    const set = new Set();
+    for (const r of data || []) {
+      const n = toTitleCase(r.person_name);
+      if (n) set.add(n);
+    }
+    setNameSuggestions(Array.from(set).sort((a, b) => a.localeCompare(b)));
+  }
 
   // -----------------------------
   // Opposite candidates for settlement
@@ -448,7 +533,6 @@ export default function StandbyList() {
   // -----------------------------
   async function applyThreeWayNoteToIds(ids) {
     const { data: rows, error } = await supabase.from("standby_events").select("id, notes").in("id", ids);
-
     if (error) {
       console.error("Fetch notes for three-way error:", error);
       return;
@@ -517,7 +601,7 @@ export default function StandbyList() {
   async function unsettleGroup(groupId) {
     if (!groupId) return;
 
-    const ok = window.confirm("Unsettle this group? The shifts will return to their lists.");
+    const ok = window.confirm("Unsettle this group? This will return both shifts to their owed/owing lists.");
     if (!ok) return;
 
     const { error } = await supabase
@@ -563,7 +647,6 @@ export default function StandbyList() {
     if (row?.deleted_at) return;
 
     const nowIso = new Date().toISOString();
-
     const { error: delErr } = await supabase.from("standby_events").update({ deleted_at: nowIso }).eq("id", id);
     if (delErr) {
       console.error("Soft delete error:", delErr);
@@ -617,19 +700,19 @@ export default function StandbyList() {
   // -----------------------------
   // Add / edit
   // -----------------------------
-  function openAddShiftModal() {
+  function openAddStandbyModal(defaults = {}) {
     resetOverlays();
+    setDrawerOpen(false);
 
-    const defaultWorkedForMe = tab === "owe" ? true : false;
-
-    platoonManualRef.current = false;
+    dutyPlatoonManualRef.current = false;
+    const defaultWorkedForMe = defaults.worked_for_me ?? false;
 
     setForm({
       worked_for_me: defaultWorkedForMe,
-      person_name: "",
-      platoon: "",
-      shift_date: "",
-      shift_type: "Day",
+      person_name: defaults.person_name ?? "",
+      platoon: defaults.platoon ?? "",
+      shift_date: defaults.shift_date ?? "",
+      shift_type: defaults.shift_type ?? "Day",
       duty_platoon: "",
       notes: "",
       settle_existing: false,
@@ -637,7 +720,25 @@ export default function StandbyList() {
     });
 
     setMismatchResolution("");
+    setFiltersOpen(false);
     setShowAddModal(true);
+
+    fetchNameSuggestions();
+  }
+
+  function computeDestinationAfterAdd(payload) {
+    const future = isFuture(payload.shift_date);
+    if (future) {
+      setSection("upcoming");
+      setDrawerGroup("upcoming");
+      setUpcomingSubtab(payload.worked_for_me ? "they_work" : "i_work");
+      setSortMode("date_asc");
+    } else {
+      setSection("standbys");
+      setDrawerGroup("standbys");
+      setStandbysSubtab(payload.worked_for_me ? "owe" : "owed");
+      setSortMode("date_desc");
+    }
   }
 
   async function submitAddShift(e) {
@@ -646,12 +747,12 @@ export default function StandbyList() {
 
     const payload = {
       user_id: user.id,
-      person_name: form.person_name.trim(),
-      platoon: form.platoon.trim() || null,
-      duty_platoon: form.duty_platoon.trim() || null,
+      person_name: toTitleCase(form.person_name),
+      platoon: String(form.platoon || "").trim() || null,
+      duty_platoon: String(form.duty_platoon || "").trim() || null,
       shift_date: form.shift_date || null,
       shift_type: (form.shift_type || "").trim() || null,
-      notes: form.notes.trim() || null,
+      notes: String(form.notes || "").trim() || null,
       worked_for_me: Boolean(form.worked_for_me),
       settled: false,
       settled_at: null,
@@ -664,15 +765,11 @@ export default function StandbyList() {
     if (!payload.shift_date) return alert("Please select a date.");
     if (!payload.shift_type) return alert("Please select Day or Night.");
 
-    const { data: inserted, error } = await supabase
-      .from("standby_events")
-      .insert([payload])
-      .select("*")
-      .single();
+    const { data: inserted, error } = await supabase.from("standby_events").insert([payload]).select("*").single();
 
     if (error) {
       console.error("Insert error:", error);
-      alert("Could not add shift. Check console.");
+      alert("Could not add standby. Check console.");
       return;
     }
 
@@ -680,13 +777,15 @@ export default function StandbyList() {
       const res = await linkSettlement(inserted.id, form.settle_with_existing_id, {
         threeWay: mismatchResolution === "threeway",
       });
-      if (!res.ok) alert("Added shift, but could not settle. Check console.");
+      if (!res.ok) alert("Added standby, but could not settle. Check console.");
     }
 
     setShowAddModal(false);
     setOppositeCandidates([]);
     setSelectedStandby(null);
     setMismatchResolution("");
+
+    computeDestinationAfterAdd(payload);
     setRefreshTick((t) => t + 1);
   }
 
@@ -694,11 +793,11 @@ export default function StandbyList() {
     if (!selectedStandby) return;
 
     const updates = {
-      person_name: editForm.person_name.trim(),
-      platoon: editForm.platoon.trim() || null,
+      person_name: toTitleCase(editForm.person_name),
+      platoon: String(editForm.platoon || "").trim() || null,
       shift_date: editForm.shift_date || null,
       shift_type: (editForm.shift_type || "").trim() || null,
-      notes: editForm.notes.trim() || null,
+      notes: String(editForm.notes || "").trim() || null,
       worked_for_me: Boolean(editForm.worked_for_me),
       duty_platoon: null,
     };
@@ -713,11 +812,9 @@ export default function StandbyList() {
         p_shift_type: updates.shift_type,
       });
 
-      if (!dutyErr && dutyData) {
-        updates.duty_platoon = String(dutyData);
-      }
+      if (!dutyErr && dutyData) updates.duty_platoon = String(dutyData);
     } catch (err) {
-      // silent fail
+      // silent
     }
 
     const { data, error } = await supabase
@@ -759,11 +856,7 @@ export default function StandbyList() {
   async function createShiftAndSettleWithSelected(newShiftPayload, threeWay) {
     if (!selectedStandby) return;
 
-    const { data: inserted, error } = await supabase
-      .from("standby_events")
-      .insert([newShiftPayload])
-      .select("*")
-      .single();
+    const { data: inserted, error } = await supabase.from("standby_events").insert([newShiftPayload]).select("*").single();
 
     if (error) {
       console.error("Insert (settle new shift) error:", error);
@@ -795,7 +888,7 @@ export default function StandbyList() {
   }, [standbys]);
 
   // -----------------------------
-  // Filter/sort view rows
+  // Filter/sort view rows (non-history-grouped)
   // -----------------------------
   const viewRows = useMemo(() => {
     const q = normalizeName(searchText);
@@ -807,8 +900,7 @@ export default function StandbyList() {
       rows = rows.filter((r) => {
         const a = normalizeName(r.person_name);
         const b = normalizeName(r.platoon);
-        const c = normalizeName(r.shift_type);
-        return a.includes(q) || b.includes(q) || c.includes(q);
+        return a.includes(q) || b.includes(q);
       });
     }
 
@@ -830,14 +922,22 @@ export default function StandbyList() {
     return rows;
   }, [standbys, searchText, platoonFilter, sortMode]);
 
+  const activeFilterCount = useMemo(() => {
+    let n = 0;
+    if (String(searchText || "").trim()) n++;
+    if (String(platoonFilter || "").trim()) n++;
+    const defaultSort = section === "upcoming" ? "date_asc" : "date_desc";
+    if (sortMode !== defaultSort) n++;
+    return n;
+  }, [searchText, platoonFilter, sortMode, section]);
+
   // -----------------------------
-  // History grouping (settled groups only)
+  // History grouping (settled only)
   // -----------------------------
   const historyGroups = useMemo(() => {
-    if (!(tab === "history" && historySubtab === "settled")) return [];
+    if (!(section === "history" && historySubtab === "settled")) return [];
 
     const rows = [...standbys];
-
     const groupsMap = new Map();
     const singles = [];
 
@@ -855,11 +955,8 @@ export default function StandbyList() {
         const v = x.settled_at ? String(x.settled_at) : "";
         return v > m ? v : m;
       }, "");
-
       const sortKey = settledAt || gid;
-
       const sortedArr = [...arr].sort((a, b) => String(b.shift_date || "").localeCompare(String(a.shift_date || "")));
-
       return { gid, sortKey, rows: sortedArr, isSingle: false };
     });
 
@@ -873,194 +970,273 @@ export default function StandbyList() {
     }));
 
     singleGroups.sort((a, b) => String(b.sortKey).localeCompare(String(a.sortKey)));
-
     return [...grouped, ...singleGroups];
-  }, [standbys, tab, historySubtab]);
+  }, [standbys, section, historySubtab]);
 
   // -----------------------------
-  // UI components
+  // Labels
   // -----------------------------
-  function BottomTab({ label, active, onClick }) {
-    return (
-      <button
-        onClick={onClick}
-        className={[
-          "flex-1 py-2 rounded-2xl transition active:scale-[0.99]",
-          active ? "bg-slate-200 text-slate-900" : "text-slate-700 hover:bg-slate-100",
-        ].join(" ")}
-        type="button"
-      >
-        <div className="text-[12px] font-semibold leading-tight">{label}</div>
-      </button>
-    );
+  function sectionTitle() {
+    if (section === "standbys") return "Standbys";
+    if (section === "upcoming") return "Upcoming";
+    return "History";
   }
 
-  function SegTab({ label, active, onClick }) {
-    return (
+  function listTitle() {
+    if (section === "standbys") return standbysSubtab === "owed" ? "Standbys - Owed to me" : "Standbys - I owe";
+    if (section === "upcoming") return upcomingSubtab === "i_work" ? "Upcoming Standbys I've Agreed To" : "Upcoming Standbys I've Requested";
+    return historySubtab === "settled" ? "Settled" : "Deleted";
+  }
+
+  function totalLabel() {
+    if (section === "standbys" && standbysSubtab === "owed") return "Total standbys owed to me:";
+    if (section === "standbys" && standbysSubtab === "owe") return "Total standbys I owe:";
+    if (section === "history" && historySubtab === "settled") return "Total settled:";
+    return "Total deleted:";
+  }
+
+  function emptyText() {
+    if (section === "standbys" && standbysSubtab === "owed") return "No one owes you a shift currently.";
+    if (section === "standbys" && standbysSubtab === "owe") return "You don't owe anyone a shift currently.";
+    if (section === "upcoming" && upcomingSubtab === "i_work") return "No upcoming shift commitments 🎉";
+    if (section === "upcoming" && upcomingSubtab === "they_work") return "No upcoming shifts off ☹️";
+    if (section === "history" && historySubtab === "settled") return "Settled shifts will appear here.";
+    return "Deleted shifts will appear here.";
+  }
+
+  // -----------------------------
+  // Drawer (collapsible submenu)
+  // -----------------------------
+  function Drawer() {
+    if (!drawerOpen) return null;
+
+    const emailLabel = session?.user?.email || user?.email || "Signed in";
+
+    const Group = ({ id, title, children }) => {
+      const open = drawerGroup === id;
+      return (
+        <div className="mb-1">
+          <button
+            type="button"
+            onClick={() => setDrawerGroup((cur) => (cur === id ? "" : id))}
+            className="w-full flex items-center justify-between px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 rounded-md"
+          >
+            <span>{title}</span>
+            <span className="text-slate-400">{open ? "▾" : "▸"}</span>
+          </button>
+          {open && <div className="ml-2 mt-1 border-l border-slate-200 pl-2">{children}</div>}
+        </div>
+      );
+    };
+
+    const SubItem = ({ label, active, onClick }) => (
       <button
+        type="button"
         onClick={onClick}
         className={[
-          "px-3 py-2 rounded-2xl text-sm font-semibold transition",
-          active
-            ? "bg-slate-900 text-white"
-            : "bg-white border border-slate-200 text-slate-900 hover:bg-slate-50 hover:text-slate-900",
+          "w-full text-left px-3 py-2 text-sm rounded-md transition",
+          active ? "bg-slate-100 text-slate-900 font-semibold" : "text-slate-700 hover:bg-slate-50",
         ].join(" ")}
-        type="button"
       >
         {label}
       </button>
     );
+
+    return (
+      <div className="fixed inset-0 z-50">
+        <div
+          className="absolute inset-0 bg-black/25"
+          onMouseDown={() => setDrawerOpen(false)}
+        />
+        <div className="absolute inset-y-0 left-0 w-[80%] max-w-[330px] bg-white text-slate-900 shadow-xl border-r border-slate-200 flex flex-col">
+          <div className="px-4 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-extrabold text-slate-900 leading-tight">Shift IOU</div>
+              <div className="text-[11px] text-slate-500 truncate mt-0.5">{emailLabel}</div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(false)}
+              className="rounded-md p-2 text-slate-700 hover:bg-slate-100 active:scale-[0.98] transition"
+              aria-label="Close menu"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="px-4 py-3 border-b border-slate-100">
+            <button
+              type="button"
+              onClick={() => openAddStandbyModal()}
+              className="w-full rounded-md bg-slate-900 text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
+            >
+              + Add Standby
+            </button>
+          </div>
+
+          <div className="px-3 py-3 overflow-y-auto">
+            <Group id="standbys" title="Standbys">
+              <SubItem
+                label="Owed to me"
+                active={section === "standbys" && standbysSubtab === "owed"}
+                onClick={() => goStandbys("owed")}
+              />
+              <SubItem
+                label="I owe"
+                active={section === "standbys" && standbysSubtab === "owe"}
+                onClick={() => goStandbys("owe")}
+              />
+            </Group>
+
+            <Group id="upcoming" title="Upcoming">
+              <SubItem
+                label="Shifts I have to work"
+                active={section === "upcoming" && upcomingSubtab === "i_work"}
+                onClick={() => goUpcoming("i_work")}
+              />
+              <SubItem
+                label="Shifts off"
+                active={section === "upcoming" && upcomingSubtab === "they_work"}
+                onClick={() => goUpcoming("they_work")}
+              />
+            </Group>
+
+            <Group id="history" title="History">
+              <SubItem
+                label="Settled"
+                active={section === "history" && historySubtab === "settled"}
+                onClick={() => goHistory("settled")}
+              />
+              <SubItem
+                label="Deleted"
+                active={section === "history" && historySubtab === "deleted"}
+                onClick={() => goHistory("deleted")}
+              />
+            </Group>
+          </div>
+
+          <div className="mt-auto px-4 py-4 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
-  function ListRow({ s }) {
+  // -----------------------------
+  // Compact row (list look)
+  // -----------------------------
+  function ListRowCompact({ s }) {
     return (
       <button
         onClick={() => setSelectedStandby((prev) => (prev?.id === s.id ? null : s))}
-        className="w-full text-left group"
+        className="w-full text-left"
         type="button"
       >
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition active:scale-[0.99] hover:shadow-md">
-          <div className="flex items-start justify-between gap-3">
+        <div className="px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="font-extrabold text-slate-900 truncate">{s.person_name}</div>
-              <div className="text-sm text-slate-500 truncate">{formatPlatoonLabel(s.platoon)}</div>
-              <div className="mt-1 text-xs text-slate-400">
+              <div className="text-[15px] font-semibold text-slate-900 truncate">{toTitleCase(s.person_name)}</div>
+              <div className="text-[12px] text-slate-500 truncate">{formatPlatoonLabel(s.platoon)}</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">
                 {formatDisplayDate(s.shift_date)}
                 {shiftTypeShort(s) ? ` • ${shiftTypeShort(s)}` : ""}
               </div>
             </div>
 
-            <div className="shrink-0 flex items-center gap-2">
-              <StatusPill text={statusText(s)} />
-              <span className="text-slate-300 group-hover:text-slate-400 transition" aria-hidden>
-                ›
-              </span>
-            </div>
+            <span className="text-slate-300" aria-hidden>
+              ›
+            </span>
           </div>
         </div>
       </button>
     );
   }
 
-  function totalLabel() {
-    if (tab === "owed") return "Total standbys owed to me:";
-    if (tab === "owe") return "Total standbys I owe:";
-    if (tab === "upcoming") return "Total upcoming commitments:";
-    if (tab === "history" && historySubtab === "settled") return "Total settled standbys:";
-    return "Total deleted standbys:";
+  // -----------------------------
+  // Filters UI
+  // -----------------------------
+  function resetFilters() {
+    setSearchText("");
+    setPlatoonFilter("");
+    setSortMode(section === "upcoming" ? "date_asc" : "date_desc");
   }
 
-  function titleLabel() {
-    if (tab === "owed") return "Standbys Owed To Me";
-    if (tab === "owe") return "Standbys I Owe";
-    if (tab === "upcoming") return "Upcoming Standby Commitments";
-    return "History";
-  }
-
-  // -----------------------------
-  // Render list
-  // -----------------------------
-  function renderList() {
-    if (loading) return <p className="text-slate-500">Loading…</p>;
-
-    const title = titleLabel();
-
-    if (tab === "history" && historySubtab === "settled") {
-      const groups = historyGroups;
-      const count = standbys.length;
-
-      return (
-        <div>
-          <div className="mb-3 flex items-end justify-between gap-3">
-            <div>
-              <div className="text-xl font-extrabold text-slate-900">{title}</div>
-              <div className="text-sm text-slate-600 mt-1 font-semibold">
-                {totalLabel()} <span className="text-slate-900">{count}</span>
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <SegTab label="Settled" active={historySubtab === "settled"} onClick={() => setHistorySubtab("settled")} />
-              <SegTab label="Deleted" active={historySubtab === "deleted"} onClick={() => setHistorySubtab("deleted")} />
-            </div>
-          </div>
-
-          {groups.length === 0 ? (
-            <EmptyState tabLabel="Settled shifts will appear here." />
-          ) : (
-            <div className="space-y-3">
-              {groups.map((g) => (
-                <div key={g.gid} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                  {!g.isSingle && (
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-xs font-semibold text-slate-500">Settled together</div>
-                      <button
-                        onClick={() => unsettleGroup(g.gid)}
-                        className="text-xs font-semibold text-slate-700 hover:text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-600 transition"
-                        type="button"
-                        title="Unsettle"
-                      >
-                        Unsettle ↩︎
-                      </button>
-                    </div>
-                  )}
-                  <div className="space-y-2">
-                    {g.rows.map((s) => (
-                      <ListRow key={s.id} s={s} />
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    const rows = viewRows;
-    const count = rows.length;
+  function FiltersBar() {
+    const showSort = !(section === "history" && historySubtab === "settled");
+    const defaultSort = section === "upcoming" ? "date_asc" : "date_desc";
 
     return (
-      <div>
-        <div className="mb-3 flex items-end justify-between gap-3">
-          <div>
-            <div className="text-xl font-extrabold text-slate-900">{title}</div>
-            <div className="text-sm text-slate-600 mt-1 font-semibold">
-              {totalLabel()} <span className="text-slate-900">{count}</span>
-            </div>
-          </div>
+      <div className="mb-3">
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((v) => !v)}
+            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+          >
+            {filtersOpen ? "Hide filters" : "Filters"}
+            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+          </button>
 
-          {tab === "history" && (
-            <div className="flex gap-2">
-              <SegTab label="Settled" active={historySubtab === "settled"} onClick={() => setHistorySubtab("settled")} />
-              <SegTab label="Deleted" active={historySubtab === "deleted"} onClick={() => setHistorySubtab("deleted")} />
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+          >
+            Reset
+          </button>
         </div>
 
-        <ControlsBar
-          searchText={searchText}
-          setSearchText={setSearchText}
-          platoonFilter={platoonFilter}
-          setPlatoonFilter={setPlatoonFilter}
-          platoonOptions={platoonOptions}
-          sortMode={sortMode}
-          setSortMode={setSortMode}
-          onReset={() => {
-            setSearchText("");
-            setSortMode(tab === "upcoming" ? "date_asc" : "date_desc");
-            setPlatoonFilter("");
-          }}
-          showSort={tab !== "history"}
-        />
+        {filtersOpen && (
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-4">
+            <input
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder="Search name or platoon…"
+              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
+            />
 
-        {rows.length === 0 ? (
-          <EmptyState tabLabel="Nothing here yet." />
-        ) : (
-          <div className="space-y-2">
-            {rows.map((s) => (
-              <ListRow key={s.id} s={s} />
-            ))}
+            <select
+              value={platoonFilter}
+              onChange={(e) => setPlatoonFilter(e.target.value)}
+              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
+            >
+              <option value="">All platoons</option>
+              {platoonOptions.map((p) => (
+                <option key={p} value={p}>
+                  {p ? (String(p).toUpperCase().includes("PLATOON") ? p : `${p} Platoon`) : "-"}
+                </option>
+              ))}
+            </select>
+
+            {showSort ? (
+              <select
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value)}
+                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
+              >
+                <option value={defaultSort}>
+                  {defaultSort === "date_asc" ? "Date (oldest)" : "Date (newest)"}
+                </option>
+                <option value="date_desc">Date (newest)</option>
+                <option value="date_asc">Date (oldest)</option>
+                <option value="name_az">Name (A–Z)</option>
+                <option value="name_za">Name (Z–A)</option>
+                <option value="platoon_az">Platoon (A–Z)</option>
+                <option value="platoon_za">Platoon (Z–A)</option>
+              </select>
+            ) : (
+              <div />
+            )}
+
+            <div />
           </div>
         )}
       </div>
@@ -1084,21 +1260,21 @@ export default function StandbyList() {
       if (!mismatch) return null;
 
       return (
-        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <div className="font-extrabold">Names don’t match</div>
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="font-semibold">Names don’t match</div>
           <div className="mt-1">
-            This might be a typo, or it might be a <span className="font-semibold">three way standby</span>. You can still settle it.
+            Could be a typo, or a <span className="font-semibold">three way standby</span>.
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => setMismatchResolution("threeway")}
               className={[
-                "rounded-2xl px-3 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99]",
+                "rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
                 mismatchResolution === "threeway"
-                  ? "bg-slate-900 text-white"
-                  : "bg-white border border-amber-200 text-amber-900",
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white border-amber-200 text-amber-900",
               ].join(" ")}
             >
               Three way standby
@@ -1108,18 +1284,20 @@ export default function StandbyList() {
               type="button"
               onClick={() => setMismatchResolution("same")}
               className={[
-                "rounded-2xl px-3 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99]",
+                "rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
                 mismatchResolution === "same"
-                  ? "bg-slate-900 text-white"
-                  : "bg-white border border-amber-200 text-amber-900",
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white border-amber-200 text-amber-900",
               ].join(" ")}
             >
-              It’s the same person
+              Same person (just a typo)
             </button>
           </div>
 
           {mismatchResolution === "threeway" && (
-            <div className="mt-2 text-xs text-amber-800">This will add a note to both shifts: “Three way standby”.</div>
+            <div className="mt-2 text-xs text-amber-800">
+              Adds note to both shifts: “Three way standby”.
+            </div>
           )}
         </div>
       );
@@ -1133,14 +1311,14 @@ export default function StandbyList() {
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setSettleChoice("new")}
-              className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 active:scale-[0.99] transition"
+              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-800 active:scale-[0.99] transition"
               type="button"
             >
               New shift
             </button>
             <button
               onClick={() => setSettleChoice("existing")}
-              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
+              className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
               type="button"
             >
               Existing shift
@@ -1153,7 +1331,7 @@ export default function StandbyList() {
                 setOppositeCandidates([]);
                 setMismatchResolution("");
               }}
-              className="rounded-2xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 active:scale-[0.99] transition"
+              className="rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 active:scale-[0.99] transition"
               type="button"
             >
               Cancel
@@ -1163,23 +1341,20 @@ export default function StandbyList() {
 
         {settleChoice === "existing" && (
           <div className="mt-3 space-y-3">
-            <div className="text-sm text-slate-600">Select an existing shift from the opposite list:</div>
+            <div className="text-sm text-slate-600">Pick a shift from the opposite list:</div>
 
             {loadingOpposite ? (
-              <p className="text-slate-500">Loading available shifts…</p>
+              <p className="text-slate-500">Loading…</p>
             ) : oppositeCandidates.length === 0 ? (
               <p className="text-slate-500">No available shifts in the opposite list.</p>
             ) : (
-              <div className="space-y-2">
-                {oppositeCandidates.map((s) => (
-                  <div
-                    key={s.id}
-                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm flex items-start justify-between gap-3"
-                  >
+              <div className="rounded-md border border-slate-200 overflow-hidden">
+                {oppositeCandidates.map((s, idx) => (
+                  <div key={s.id} className={["p-3 flex items-center justify-between gap-3", idx ? "border-t border-slate-200" : ""].join(" ")}>
                     <div className="min-w-0">
-                      <div className="font-extrabold text-slate-900 truncate">{s.person_name}</div>
-                      <div className="text-sm text-slate-500 truncate">{formatPlatoonLabel(s.platoon)}</div>
-                      <div className="mt-1 text-xs text-slate-400">
+                      <div className="text-sm font-semibold text-slate-900 truncate">{toTitleCase(s.person_name)}</div>
+                      <div className="text-xs text-slate-500 truncate">{formatPlatoonLabel(s.platoon)}</div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
                         {formatDisplayDate(s.shift_date)}
                         {shiftTypeShort(s) ? ` • ${shiftTypeShort(s)}` : ""}
                       </div>
@@ -1191,9 +1366,9 @@ export default function StandbyList() {
                         setMismatchResolution("");
                       }}
                       className={[
-                        "shrink-0 rounded-2xl px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
+                        "shrink-0 rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
                         settleWithExistingId === s.id
-                          ? "bg-slate-200 border-slate-300 text-slate-900"
+                          ? "bg-slate-100 border-slate-300 text-slate-900"
                           : "bg-white border-slate-200 text-slate-900 hover:bg-slate-50",
                       ].join(" ")}
                       type="button"
@@ -1215,7 +1390,7 @@ export default function StandbyList() {
                   setOppositeCandidates([]);
                   setMismatchResolution("");
                 }}
-                className="rounded-2xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 active:scale-[0.99] transition"
+                className="rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 active:scale-[0.99] transition"
                 type="button"
               >
                 Back
@@ -1224,7 +1399,7 @@ export default function StandbyList() {
               {settleWithExistingId && (
                 <button
                   onClick={() => settleSelectedWithExisting(settleWithExistingId)}
-                  className="rounded-2xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 active:scale-[0.99] transition"
+                  className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-800 active:scale-[0.99] transition"
                   type="button"
                 >
                   Settle now
@@ -1247,12 +1422,95 @@ export default function StandbyList() {
   }
 
   // -----------------------------
+  // Render list
+  // -----------------------------
+  function renderList() {
+    if (loading) return <p className="text-slate-500">Loading…</p>;
+
+    // History settled grouped
+    if (section === "history" && historySubtab === "settled") {
+      const groups = historyGroups;
+      const count = standbys.length;
+
+      return (
+        <div>
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <div className="text-lg font-extrabold text-slate-900">{listTitle()}</div>
+              <div className="text-sm text-slate-600 mt-1 font-semibold">
+                {totalLabel()} <span className="text-slate-900">{count}</span>
+              </div>
+            </div>
+          </div>
+
+          {groups.length === 0 ? (
+            <EmptyState tabLabel={emptyText()} />
+          ) : (
+            <div className="space-y-3">
+              {groups.map((g) => (
+                <div key={g.gid} className="rounded-md border border-slate-200 bg-white overflow-hidden">
+                  {!g.isSingle && (
+                    <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
+                      <div className="text-xs font-semibold text-slate-500">Settled together</div>
+                      <button
+                        onClick={() => unsettleGroup(g.gid)}
+                        className="text-xs font-semibold text-slate-700 hover:text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-600 transition"
+                        type="button"
+                        title="Unsettle"
+                      >
+                        Unsettle ↩︎
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="divide-y divide-slate-200">
+                    {g.rows.map((s) => (
+                      <ListRowCompact key={s.id} s={s} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const rows = viewRows;
+    const count = rows.length;
+
+    return (
+      <div>
+        <div className="mb-3">
+          <div className="text-lg font-extrabold text-slate-900">{listTitle()}</div>
+          <div className="text-sm text-slate-600 mt-1 font-semibold">
+            {totalLabel()} <span className="text-slate-900">{count}</span>
+          </div>
+        </div>
+
+        {section !== "history" && <FiltersBar />}
+        {section === "history" && historySubtab === "deleted" && <FiltersBar />}
+
+        {rows.length === 0 ? (
+          <EmptyState tabLabel={emptyText()} />
+        ) : (
+          <div className="rounded-md border border-slate-200 bg-white overflow-hidden divide-y divide-slate-200">
+            {rows.map((s) => (
+              <ListRowCompact key={s.id} s={s} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // -----------------------------
   // Logged out
   // -----------------------------
   if (!user?.id) {
     return (
       <div className="mx-auto max-w-xl px-4 py-10">
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="rounded-md border border-slate-200 bg-white p-6 shadow-sm">
           <div className="text-sm text-slate-700 font-semibold">You’re not logged in.</div>
           <div className="mt-2 text-sm text-slate-600">Go to your login screen, sign in, then come back.</div>
         </div>
@@ -1260,31 +1518,40 @@ export default function StandbyList() {
     );
   }
 
-  const emailLabel = session?.user?.email || user?.email || "Signed in";
-
+  // -----------------------------
+  // Main render
+  // -----------------------------
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-xl px-4 pt-6 pb-28">
-        {/* Tight header (single header only) */}
-        <div className="mb-4 rounded-3xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-lg font-extrabold text-slate-900 leading-tight">Standby Ledger</div>
-              <div className="text-xs text-slate-500 truncate mt-0.5">{emailLabel}</div>
-            </div>
+    <div className="min-h-screen bg-white">
+      <Drawer />
 
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="shrink-0 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold shadow-sm hover:bg-slate-50 active:scale-[0.99] transition"
-            >
-              Sign out
-            </button>
-          </div>
+      {/* Top bar */}
+      <div className="sticky top-0 z-20 bg-white border-b border-slate-100">
+        <div className="mx-auto max-w-xl px-4 py-3 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            aria-label="Open menu"
+          >
+            ☰
+          </button>
+
+          <div className="text-sm font-extrabold text-slate-900 truncate">{sectionTitle()}</div>
+
+          <button
+            type="button"
+            onClick={() => openAddStandbyModal()}
+            className="rounded-md bg-slate-900 text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
+          >
+            + Add
+          </button>
         </div>
+      </div>
 
+      <div className="mx-auto max-w-xl px-4 pt-4 pb-10">
         {fetchError && (
-          <div className="mb-4 rounded-3xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm">
+          <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm">
             <span className="font-bold">Fetch error:</span> {fetchError}
           </div>
         )}
@@ -1292,32 +1559,10 @@ export default function StandbyList() {
         {renderList()}
       </div>
 
-      {/* Floating Add */}
-      <button
-        onClick={openAddShiftModal}
-        className="fixed right-5 bottom-[88px] z-40 w-14 h-14 rounded-full shadow-lg transition active:scale-[0.98] bg-slate-900 text-white hover:bg-slate-800 flex items-center justify-center text-2xl font-bold"
-        aria-label="Add shift"
-        type="button"
-      >
-        +
-      </button>
-
-      {/* Bottom menu */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 bg-white/85 backdrop-blur">
-        <div className="mx-auto max-w-xl px-4 py-3">
-          <div className="grid grid-cols-4 gap-2 rounded-3xl bg-white p-2 shadow-sm border border-slate-200">
-            <BottomTab label="Standbys Owed To Me" active={tab === "owed"} onClick={() => goTab("owed")} />
-            <BottomTab label="Standbys I Owe" active={tab === "owe"} onClick={() => goTab("owe")} />
-            <BottomTab label="Upcoming Standbys" active={tab === "upcoming"} onClick={() => goTab("upcoming")} />
-            <BottomTab label="History" active={tab === "history"} onClick={() => goTab("history")} />
-          </div>
-        </div>
-      </div>
-
       {/* Add Modal */}
       {showAddModal && (
         <ModalShell
-          title="Add shift"
+          title="Add Standby"
           onClose={() => {
             setShowAddModal(false);
             setOppositeCandidates([]);
@@ -1325,8 +1570,38 @@ export default function StandbyList() {
           }}
         >
           <form onSubmit={submitAddShift} className="space-y-4">
-            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-extrabold text-slate-900 mb-2">Shift direction</div>
+            <div>
+              <label className="text-sm font-semibold text-slate-700">Shift date</label>
+              <input
+                type="date"
+                value={form.shift_date}
+                onChange={(e) => {
+                  dutyPlatoonManualRef.current = false;
+                  setForm((f) => ({ ...f, shift_date: e.target.value }));
+                }}
+                className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-semibold text-slate-700">Shift type</label>
+              <select
+                value={form.shift_type}
+                onChange={(e) => {
+                  dutyPlatoonManualRef.current = false;
+                  setForm((f) => ({ ...f, shift_type: e.target.value }));
+                }}
+                className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
+              >
+                <option value="Day">Day</option>
+                <option value="Night">Night</option>
+              </select>
+            </div>
+
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+              <div className="text-sm font-semibold text-slate-900 mb-2">
+                {isFuture(form.shift_date) ? "Who will work this shift?" : "Who worked this shift?"}
+              </div>
               <div className="space-y-2">
                 <label className="flex items-start gap-3 text-sm text-slate-800">
                   <input
@@ -1336,8 +1611,11 @@ export default function StandbyList() {
                     onChange={() => setForm((f) => ({ ...f, worked_for_me: false, settle_with_existing_id: null }))}
                     className="mt-1"
                   />
-                  <div className="font-semibold">I am working this shift for them</div>
+                  <div className="font-semibold">
+                    {isFuture(form.shift_date) ? "I will work for them" : "I worked for them"}
+                  </div>
                 </label>
+
                 <label className="flex items-start gap-3 text-sm text-slate-800">
                   <input
                     type="radio"
@@ -1346,59 +1624,47 @@ export default function StandbyList() {
                     onChange={() => setForm((f) => ({ ...f, worked_for_me: true, settle_with_existing_id: null }))}
                     className="mt-1"
                   />
-                  <div className="font-semibold">They are working this shift for me</div>
+                  <div className="font-semibold">
+                    {isFuture(form.shift_date) ? "They will work for me" : "They worked for me"}
+                  </div>
                 </label>
               </div>
             </div>
 
-            <InputField label="Name" value={form.person_name} onChange={(v) => setForm((f) => ({ ...f, person_name: v }))} />
+            <div>
+              <label className="text-sm font-semibold text-slate-700">Name</label>
+              <input
+                list="nameSuggestions"
+                value={form.person_name}
+                onChange={(e) => setForm((f) => ({ ...f, person_name: toTitleCase(e.target.value) }))}
+                placeholder="Start typing…"
+                className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
+              />
+              <datalist id="nameSuggestions">
+                {nameSuggestions.map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
+            </div>
 
             <InputField
-              label="What Platoon is this person on?"
+              label="What platoon is this person on?"
               placeholder='e.g. "C"'
               value={form.platoon}
-              onChange={(v) => {
-                platoonManualRef.current = true;
-                setForm((f) => ({ ...f, platoon: v }));
-              }}
+              onChange={(v) => setForm((f) => ({ ...f, platoon: v }))}
             />
 
-            <div>
-              <label className="text-sm font-semibold text-slate-700">Shift date</label>
-              <input
-                type="date"
-                value={form.shift_date}
-                onChange={(e) => {
-                  platoonManualRef.current = false;
-                  setForm((f) => ({ ...f, shift_date: e.target.value }));
-                }}
-                className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
-              />
-            </div>
-
-            <div>
-              <select
-                value={form.shift_type}
-                onChange={(e) => {
-                  platoonManualRef.current = false;
-                  setForm((f) => ({ ...f, shift_type: e.target.value }));
-                }}
-                className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
-              >
-                <option value="Day">Day</option>
-                <option value="Night">Night</option>
-              </select>
-              <div className="mt-1 text-xs text-slate-500">Shift type</div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="text-xs font-semibold text-slate-500">You are working on</div>
-              <div className="text-sm font-extrabold text-slate-900">
-                {form.duty_platoon ? formatPlatoonLabel(form.duty_platoon) : "—"}
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="text-xs font-semibold text-slate-600">
+                {shiftSummaryForDuty(form.shift_type, form.duty_platoon, form.shift_date)}
               </div>
             </div>
 
-            <TextAreaField label="Notes (optional)" value={form.notes} onChange={(v) => setForm((f) => ({ ...f, notes: v }))} />
+            <TextAreaField
+              label="Notes (optional)"
+              value={form.notes}
+              onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
+            />
 
             <label className="flex items-start gap-3 text-sm text-slate-800">
               <input
@@ -1407,7 +1673,7 @@ export default function StandbyList() {
                 onChange={(e) => setForm((f) => ({ ...f, settle_existing: e.target.checked, settle_with_existing_id: null }))}
                 className="mt-1"
               />
-              <div className="font-semibold">Would you like to use this shift to settle and existing standby?</div>
+              <div className="font-semibold">Use this to settle an existing standby</div>
             </label>
 
             {form.settle_existing && (
@@ -1426,7 +1692,7 @@ export default function StandbyList() {
               <div className="flex gap-2">
                 <button
                   type="submit"
-                  className="flex-1 rounded-2xl bg-slate-900 border border-slate-900 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 hover:border-slate-800 active:scale-[0.99] transition"
+                  className="flex-1 rounded-md bg-slate-900 text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
                 >
                   Add
                 </button>
@@ -1438,7 +1704,7 @@ export default function StandbyList() {
                     setOppositeCandidates([]);
                     setMismatchResolution("");
                   }}
-                  className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="flex-1 rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                 >
                   Cancel
                 </button>
@@ -1453,7 +1719,7 @@ export default function StandbyList() {
         <ModalShell title="" onClose={resetOverlays}>
           {!isEditing ? (
             <div className="space-y-4">
-              <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="rounded-md border border-slate-200 bg-white p-4">
                 <div className="text-sm font-extrabold text-slate-900">Standby</div>
                 <div className="mt-2 text-sm text-slate-700 leading-relaxed">{detailNarrative(selectedStandby)}</div>
 
@@ -1461,10 +1727,15 @@ export default function StandbyList() {
                   <div className="text-xs font-semibold text-slate-500">Status</div>
                   <StatusPill text={statusText(selectedStandby)} />
                 </div>
+
+                <div className="mt-3 text-xs text-slate-400">
+                  {formatDisplayDate(selectedStandby.shift_date)}
+                  {shiftTypeShort(selectedStandby) ? ` • ${shiftTypeShort(selectedStandby)}` : ""}
+                </div>
               </div>
 
               {selectedStandby.notes && (
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 shadow-sm">
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                   <div className="font-extrabold text-slate-900 mb-1">Notes</div>
                   <div className="whitespace-pre-wrap">{selectedStandby.notes}</div>
                 </div>
@@ -1475,10 +1746,10 @@ export default function StandbyList() {
               <InputField
                 label="Name"
                 value={editForm.person_name}
-                onChange={(v) => setEditForm((f) => ({ ...f, person_name: v }))}
+                onChange={(v) => setEditForm((f) => ({ ...f, person_name: toTitleCase(v) }))}
               />
               <InputField
-                label="What Platoon is this person on?"
+                label="What platoon is this person on?"
                 value={editForm.platoon}
                 onChange={(v) => setEditForm((f) => ({ ...f, platoon: v }))}
               />
@@ -1488,27 +1759,29 @@ export default function StandbyList() {
                   type="date"
                   value={editForm.shift_date}
                   onChange={(e) => setEditForm((f) => ({ ...f, shift_date: e.target.value }))}
-                  className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
+                  className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
                 />
               </div>
               <div>
+                <label className="text-sm font-semibold text-slate-700">Shift type</label>
                 <select
                   value={editForm.shift_type}
                   onChange={(e) => setEditForm((f) => ({ ...f, shift_type: e.target.value }))}
-                  className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
+                  className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
                 >
                   <option value="Day">Day</option>
                   <option value="Night">Night</option>
                 </select>
-                <div className="mt-1 text-xs text-slate-500">Shift type</div>
               </div>
               <TextAreaField
                 label="Notes (optional)"
                 value={editForm.notes}
                 onChange={(v) => setEditForm((f) => ({ ...f, notes: v }))}
               />
-              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-extrabold text-slate-900 mb-2">Shift direction</div>
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="text-sm font-semibold text-slate-900 mb-2">
+                  {isFuture(editForm.shift_date) ? "Who will work this shift?" : "Who worked this shift?"}
+                </div>
                 <div className="space-y-2">
                   <label className="flex items-start gap-3 text-sm text-slate-800">
                     <input
@@ -1518,7 +1791,7 @@ export default function StandbyList() {
                       onChange={() => setEditForm((f) => ({ ...f, worked_for_me: false }))}
                       className="mt-1"
                     />
-                    <div className="font-semibold">I am working this shift for them</div>
+                    <div className="font-semibold">{isFuture(editForm.shift_date) ? "I will work for them" : "I worked for them"}</div>
                   </label>
                   <label className="flex items-start gap-3 text-sm text-slate-800">
                     <input
@@ -1528,7 +1801,7 @@ export default function StandbyList() {
                       onChange={() => setEditForm((f) => ({ ...f, worked_for_me: true }))}
                       className="mt-1"
                     />
-                    <div className="font-semibold">They are working this shift for me</div>
+                    <div className="font-semibold">{isFuture(editForm.shift_date) ? "They will work for me" : "They worked for me"}</div>
                   </label>
                 </div>
               </div>
@@ -1536,18 +1809,18 @@ export default function StandbyList() {
           )}
 
           <div className="sticky bottom-0 -mx-5 px-5 py-4 bg-white border-t border-slate-100 mt-5">
-            {(tab === "history" && historySubtab === "deleted") ? (
+            {section === "history" && historySubtab === "deleted" ? (
               <div className="flex gap-2">
                 <button
                   onClick={() => restoreStandby(selectedStandby.id)}
-                  className="flex-1 rounded-2xl bg-emerald-600 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 active:scale-[0.99] transition"
+                  className="flex-1 rounded-md bg-emerald-600 px-3 py-2.5 text-sm font-semibold text--slate-900 hover:bg-emerald-500 active:scale-[0.99] transition"
                   type="button"
                 >
                   Restore
                 </button>
                 <button
                   onClick={resetOverlays}
-                  className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="flex-1 rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                   type="button"
                 >
                   Close
@@ -1557,7 +1830,7 @@ export default function StandbyList() {
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => setIsEditing(true)}
-                  className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                   type="button"
                 >
                   Edit
@@ -1572,7 +1845,7 @@ export default function StandbyList() {
                       setOppositeCandidates([]);
                       setMismatchResolution("");
                     }}
-                    className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                    className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                     type="button"
                   >
                     Settle
@@ -1582,7 +1855,7 @@ export default function StandbyList() {
                 {!selectedStandby.deleted_at && (
                   <button
                     onClick={() => deleteStandby(selectedStandby.id)}
-                    className="rounded-2xl bg-rose-600 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-rose-700 active:scale-[0.99] transition"
+                    className="rounded-md bg-rose-600 text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-rose-700 active:scale-[0.99] transition"
                     type="button"
                   >
                     Delete
@@ -1591,7 +1864,7 @@ export default function StandbyList() {
 
                 <button
                   onClick={resetOverlays}
-                  className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                   type="button"
                 >
                   Close
@@ -1601,7 +1874,7 @@ export default function StandbyList() {
               <div className="flex gap-2">
                 <button
                   onClick={saveEdits}
-                  className="flex-1 rounded-2xl bg-slate-900 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 active:scale-[0.99] transition"
+                  className="flex-1 rounded-md bg-slate-900 px-3 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-800 active:scale-[0.99] transition"
                   type="button"
                 >
                   Save
@@ -1619,7 +1892,7 @@ export default function StandbyList() {
                       worked_for_me: Boolean(selectedStandby.worked_for_me),
                     });
                   }}
-                  className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="flex-1 rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                   type="button"
                 >
                   Cancel
@@ -1637,70 +1910,9 @@ export default function StandbyList() {
 
 /* ---------- Helper Components ---------- */
 
-function ControlsBar({
-  searchText,
-  setSearchText,
-  platoonFilter,
-  setPlatoonFilter,
-  platoonOptions,
-  sortMode,
-  setSortMode,
-  onReset,
-  showSort = true,
-}) {
-  return (
-    <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-4">
-      <input
-        value={searchText}
-        onChange={(e) => setSearchText(e.target.value)}
-        placeholder="Search…"
-        className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm shadow-sm"
-      />
-
-      <select
-        value={platoonFilter}
-        onChange={(e) => setPlatoonFilter(e.target.value)}
-        className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm shadow-sm"
-      >
-        <option value="">All platoons</option>
-        {platoonOptions.map((p) => (
-          <option key={p} value={p}>
-            {p ? (String(p).toUpperCase().includes("PLATOON") ? p : `${p} Platoon`) : "-"}
-          </option>
-        ))}
-      </select>
-
-      {showSort ? (
-        <select
-          value={sortMode}
-          onChange={(e) => setSortMode(e.target.value)}
-          className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm shadow-sm"
-        >
-          <option value="date_desc">Date (newest)</option>
-          <option value="date_asc">Date (oldest)</option>
-          <option value="name_az">Name (A–Z)</option>
-          <option value="name_za">Name (Z–A)</option>
-          <option value="platoon_az">Platoon (A–Z)</option>
-          <option value="platoon_za">Platoon (Z–A)</option>
-        </select>
-      ) : (
-        <div />
-      )}
-
-      <button
-        type="button"
-        onClick={onReset}
-        className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold shadow-sm hover:bg-slate-50 active:scale-[0.99] transition"
-      >
-        Reset
-      </button>
-    </div>
-  );
-}
-
 function EmptyState({ tabLabel }) {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+    <div className="rounded-md border border-slate-200 bg-white p-6 text-center">
       <div className="text-3xl">🗂️</div>
       <div className="mt-2 text-sm font-semibold text-slate-700">{tabLabel}</div>
     </div>
@@ -1720,11 +1932,11 @@ function AddSettleExistingBlock({
   const mismatch = other ? getNameMismatchInfo(form.person_name, other.person_name).mismatch : false;
 
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+    <div className="rounded-md border border-slate-200 bg-white p-4 space-y-3">
       <div className="text-sm font-extrabold text-slate-900">Select an existing shift</div>
 
       {loadingOpposite ? (
-        <p className="text-slate-500 text-sm">Loading available shifts…</p>
+        <p className="text-slate-500 text-sm">Loading…</p>
       ) : oppositeCandidates.length === 0 ? (
         <p className="text-slate-500 text-sm">No available shifts to settle with.</p>
       ) : (
@@ -1734,12 +1946,12 @@ function AddSettleExistingBlock({
             setForm((f) => ({ ...f, settle_with_existing_id: e.target.value || null }));
             setMismatchResolution("");
           }}
-          className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
+          className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
         >
           <option value="">— Select —</option>
           {oppositeCandidates.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.person_name} ({formatPlatoonLabel(s.platoon)}) • {formatDisplayDate(s.shift_date)}
+              {toTitleCase(s.person_name)} ({formatPlatoonLabel(s.platoon)}) • {formatDisplayDate(s.shift_date)}
               {shiftTypeShort(s) ? ` • ${shiftTypeShort(s)}` : ""}
             </option>
           ))}
@@ -1747,21 +1959,21 @@ function AddSettleExistingBlock({
       )}
 
       {mismatch && (
-        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <div className="font-extrabold">Names don’t match</div>
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="font-semibold">Names don’t match</div>
           <div className="mt-1">
-            This might be a typo, or it might be a <span className="font-semibold">three way standby</span>. You can still settle it.
+            Could be a typo, or a <span className="font-semibold">three way standby</span>.
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => setMismatchResolution("threeway")}
               className={[
-                "rounded-2xl px-3 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99]",
+                "rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
                 mismatchResolution === "threeway"
-                  ? "bg-slate-900 text-white"
-                  : "bg-white border border-amber-200 text-amber-900",
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white border-amber-200 text-amber-900",
               ].join(" ")}
             >
               Three way standby
@@ -1771,10 +1983,10 @@ function AddSettleExistingBlock({
               type="button"
               onClick={() => setMismatchResolution("same")}
               className={[
-                "rounded-2xl px-3 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99]",
+                "rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
                 mismatchResolution === "same"
-                  ? "bg-slate-900 text-white"
-                  : "bg-white border border-amber-200 text-amber-900",
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white border-amber-200 text-amber-900",
               ].join(" ")}
             >
               It’s the same person
@@ -1782,7 +1994,7 @@ function AddSettleExistingBlock({
           </div>
 
           {mismatchResolution === "threeway" && (
-            <div className="mt-2 text-xs text-amber-800">This will add a note to both shifts: “Three way standby”.</div>
+            <div className="mt-2 text-xs text-amber-800">Adds “Three way standby” note to both shifts.</div>
           )}
         </div>
       )}
@@ -1819,8 +2031,16 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
       <div className="text-sm font-semibold text-slate-800 mb-2">New shift to settle with</div>
 
       <div className="space-y-4">
-        <InputField label="Name" value={mini.person_name} onChange={(v) => setMini((m) => ({ ...m, person_name: v }))} />
-        <InputField label="What Platoon is this person on?" value={mini.platoon} onChange={(v) => setMini((m) => ({ ...m, platoon: v }))} />
+        <InputField
+          label="Name"
+          value={mini.person_name}
+          onChange={(v) => setMini((m) => ({ ...m, person_name: toTitleCase(v) }))}
+        />
+        <InputField
+          label="What platoon is this person on?"
+          value={mini.platoon}
+          onChange={(v) => setMini((m) => ({ ...m, platoon: v }))}
+        />
 
         <div>
           <label className="text-sm font-semibold text-slate-700">Shift date</label>
@@ -1828,20 +2048,20 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
             type="date"
             value={mini.shift_date}
             onChange={(e) => setMini((m) => ({ ...m, shift_date: e.target.value }))}
-            className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
+            className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
           />
         </div>
 
         <div>
+          <label className="text-sm font-semibold text-slate-700">Shift type</label>
           <select
             value={mini.shift_type}
             onChange={(e) => setMini((m) => ({ ...m, shift_type: e.target.value }))}
-            className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
+            className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
           >
             <option value="Day">Day</option>
             <option value="Night">Night</option>
           </select>
-          <div className="mt-1 text-xs text-slate-500">Shift type</div>
         </div>
 
         <TextAreaField label="Notes (optional)" value={mini.notes} onChange={(v) => setMini((m) => ({ ...m, notes: v }))} />
@@ -1866,11 +2086,11 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
 
               const payload = {
                 user_id: userId,
-                person_name: mini.person_name.trim(),
-                platoon: mini.platoon.trim() || null,
+                person_name: toTitleCase(mini.person_name),
+                platoon: String(mini.platoon || "").trim() || null,
                 shift_date: mini.shift_date || null,
                 shift_type: (mini.shift_type || "").trim() || null,
-                notes: mini.notes.trim() || null,
+                notes: String(mini.notes || "").trim() || null,
                 worked_for_me: defaultWorkedForMe,
                 settled: false,
                 settled_at: null,
@@ -1885,14 +2105,14 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
 
               onCreate(payload, mini.threeWay);
             }}
-            className="flex-1 rounded-2xl bg-slate-900 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 active:scale-[0.99] transition"
+            className="flex-1 rounded-md bg-slate-900 px-3 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-800 active:scale-[0.99] transition"
             type="button"
           >
             Create & settle
           </button>
           <button
             onClick={onBack}
-            className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            className="flex-1 rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
             type="button"
           >
             Back
@@ -1932,16 +2152,16 @@ function ModalShell({ title, children, onClose }) {
 
       <div
         className={[
-          "relative w-full max-w-xl max-h-[90vh] flex flex-col rounded-3xl bg-white shadow-xl border border-slate-200",
+          "relative w-full max-w-xl max-h-[90vh] flex flex-col rounded-md bg-white shadow-xl border border-slate-200",
           "transition duration-150",
           open ? "scale-100" : "scale-[0.98]",
         ].join(" ")}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-100 bg-white rounded-t-3xl">
-          <div className="text-lg font-extrabold text-slate-900 truncate">{title || ""}</div>
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-100 bg-white">
+          <div className="text-base font-extrabold text-slate-900 truncate">{title || ""}</div>
           <button
             onClick={requestClose}
-            className="rounded-full p-2 text-slate-700 hover:bg-slate-100 active:scale-[0.98] transition"
+            className="rounded-md p-2 text-slate-700 hover:bg-slate-100 active:scale-[0.98] transition"
             aria-label="Close"
             type="button"
           >
@@ -1963,7 +2183,7 @@ function InputField({ label, value, onChange, placeholder }) {
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
+        className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
       />
     </div>
   );
@@ -1976,7 +2196,7 @@ function TextAreaField({ label, value, onChange }) {
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full min-h-[90px] rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
+        className="mt-1 w-full min-h-[90px] rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
       />
     </div>
   );
