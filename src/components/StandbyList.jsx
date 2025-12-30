@@ -74,17 +74,17 @@ function StatusPill({ text }) {
   const base =
     "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap";
   const t = (text || "").toLowerCase();
-  const cls =
-    t.includes("deleted")
-      ? "bg-rose-100 text-rose-800"
-      : t.includes("settled")
-      ? "bg-emerald-100 text-emerald-800"
-      : "bg-slate-100 text-slate-700";
+  const cls = t.includes("deleted")
+    ? "bg-rose-100 text-rose-800"
+    : t.includes("settled")
+    ? "bg-emerald-100 text-emerald-800"
+    : "bg-slate-100 text-slate-700";
   return <span className={`${base} ${cls}`}>{text}</span>;
 }
 
 export default function StandbyList() {
   const [user, setUser] = useState(null);
+  const [session, setSession] = useState(null);
 
   // Primary nav tabs
   const [tab, setTab] = useState("owed"); // owed | owe | upcoming | history
@@ -116,8 +116,8 @@ export default function StandbyList() {
   const [form, setForm] = useState({
     worked_for_me: false,
     person_name: "",
-    platoon: "",       // their home platoon (manual)
-    duty_platoon: "",  // the platoon you’re working on (auto)
+    platoon: "", // their home platoon (manual)
+    duty_platoon: "", // the platoon you’re working on (auto)
     shift_date: "",
     shift_type: "Day",
     notes: "",
@@ -141,6 +141,47 @@ export default function StandbyList() {
   });
 
   const [refreshTick, setRefreshTick] = useState(0);
+
+  // -----------------------------
+  // AUTH (single source of truth)
+  // -----------------------------
+  useEffect(() => {
+    let mounted = true;
+
+    async function init() {
+      const { data, error } = await supabase.auth.getSession();
+      if (!mounted) return;
+
+      if (error) {
+        console.error("Session error:", error);
+        setSession(null);
+        setUser(null);
+        return;
+      }
+
+      setSession(data?.session ?? null);
+      setUser(data?.session?.user ?? null);
+    }
+
+    init();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!mounted) return;
+      setSession(nextSession ?? null);
+      setUser(nextSession?.user ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+  }
 
   // -----------------------------
   // Scroll lock when modal open
@@ -201,40 +242,6 @@ export default function StandbyList() {
   }
 
   // -----------------------------
-  // AUTH
-  // -----------------------------
-  useEffect(() => {
-    let mounted = true;
-
-    async function init() {
-      const { data, error } = await supabase.auth.getSession();
-      if (!mounted) return;
-
-      if (error) {
-        console.error("Session error:", error);
-        setUser(null);
-        return;
-      }
-
-      setUser(data.session?.user ?? null);
-    }
-
-    init();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!mounted) return;
-      setUser(session?.user ?? null);
-    });
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  // -----------------------------
   // Keep edit form in sync
   // -----------------------------
   useEffect(() => {
@@ -256,7 +263,6 @@ export default function StandbyList() {
   }, [selectedStandby]);
 
   // -----------------------------
-  // ✅ FIX: Keep this hook BEFORE any early returns
   // Upcoming default sort: oldest first
   // -----------------------------
   useEffect(() => {
@@ -660,55 +666,54 @@ export default function StandbyList() {
     setRefreshTick((t) => t + 1);
   }
 
-async function saveEdits() {
-  if (!selectedStandby) return;
+  async function saveEdits() {
+    if (!selectedStandby) return;
 
-  const updates = {
-    person_name: editForm.person_name.trim(),
-    platoon: editForm.platoon.trim() || null,   // their normal platoon
-    shift_date: editForm.shift_date || null,
-    shift_type: (editForm.shift_type || "").trim() || null,
-    notes: editForm.notes.trim() || null,
-    worked_for_me: Boolean(editForm.worked_for_me),
-    duty_platoon: null,                         // will be recomputed below
-  };
+    const updates = {
+      person_name: editForm.person_name.trim(),
+      platoon: editForm.platoon.trim() || null, // their normal platoon
+      shift_date: editForm.shift_date || null,
+      shift_type: (editForm.shift_type || "").trim() || null,
+      notes: editForm.notes.trim() || null,
+      worked_for_me: Boolean(editForm.worked_for_me),
+      duty_platoon: null, // will be recomputed below
+    };
 
-  if (!updates.person_name) return alert("Please enter a name.");
-  if (!updates.shift_date) return alert("Please select a date.");
-  if (!updates.shift_type) return alert("Please select Day or Night.");
+    if (!updates.person_name) return alert("Please enter a name.");
+    if (!updates.shift_date) return alert("Please select a date.");
+    if (!updates.shift_type) return alert("Please select Day or Night.");
 
-  // 👇 THIS is the new part
-  try {
-    const { data: dutyData, error: dutyErr } = await supabase.rpc("get_platoon_on_duty", {
-      p_date: updates.shift_date,
-      p_shift_type: updates.shift_type,
-    });
+    // recompute duty platoon from roster
+    try {
+      const { data: dutyData, error: dutyErr } = await supabase.rpc("get_platoon_on_duty", {
+        p_date: updates.shift_date,
+        p_shift_type: updates.shift_type,
+      });
 
-    if (!dutyErr && dutyData) {
-      updates.duty_platoon = String(dutyData);
+      if (!dutyErr && dutyData) {
+        updates.duty_platoon = String(dutyData);
+      }
+    } catch (err) {
+      // silent fail — roster might not exist yet
     }
-  } catch (err) {
-    // silent fail — roster might not exist yet
+
+    const { data, error } = await supabase
+      .from("standby_events")
+      .update(updates)
+      .eq("id", selectedStandby.id)
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("Edit update error:", error);
+      alert("Could not save changes. Check console.");
+      return;
+    }
+
+    setSelectedStandby(data);
+    setIsEditing(false);
+    setRefreshTick((t) => t + 1);
   }
-
-  const { data, error } = await supabase
-    .from("standby_events")
-    .update(updates)
-    .eq("id", selectedStandby.id)
-    .select("*")
-    .single();
-
-  if (error) {
-    console.error("Edit update error:", error);
-    alert("Could not save changes. Check console.");
-    return;
-  }
-
-  setSelectedStandby(data);
-  setIsEditing(false);
-  setRefreshTick((t) => t + 1);
-}
-
 
   async function settleSelectedWithExisting(otherId) {
     if (!selectedStandby) return;
@@ -873,7 +878,7 @@ async function saveEdits() {
         onClick={onClick}
         className={[
           "px-3 py-2 rounded-2xl text-sm font-semibold transition",
-            active
+          active
             ? "bg-slate-900 text-white"
             : "bg-white border border-slate-200 text-slate-900 hover:bg-slate-50 hover:text-slate-900",
         ].join(" ")}
@@ -1070,7 +1075,9 @@ async function saveEdits() {
               onClick={() => setMismatchResolution("threeway")}
               className={[
                 "rounded-2xl px-3 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99]",
-                mismatchResolution === "threeway" ? "bg-slate-900 text-white" : "bg-white border border-amber-200 text-amber-900",
+                mismatchResolution === "threeway"
+                  ? "bg-slate-900 text-white"
+                  : "bg-white border border-amber-200 text-amber-900",
               ].join(" ")}
             >
               Three way standby
@@ -1081,7 +1088,9 @@ async function saveEdits() {
               onClick={() => setMismatchResolution("same")}
               className={[
                 "rounded-2xl px-3 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99]",
-                mismatchResolution === "same" ? "bg-slate-900 text-white" : "bg-white border border-amber-200 text-amber-900",
+                mismatchResolution === "same"
+                  ? "bg-slate-900 text-white"
+                  : "bg-white border border-amber-200 text-amber-900",
               ].join(" ")}
             >
               It’s the same person
@@ -1110,8 +1119,7 @@ async function saveEdits() {
             </button>
             <button
               onClick={() => setSettleChoice("existing")}
-              className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
               type="button"
             >
               Existing shift
@@ -1231,9 +1239,29 @@ async function saveEdits() {
     );
   }
 
+  const emailLabel = session?.user?.email || user?.email || "Signed in";
+
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="mx-auto max-w-xl px-4 pt-6 pb-28">
+        {/* Tight header */}
+        <div className="mb-4 rounded-3xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-lg font-extrabold text-slate-900 leading-tight">Standby Me</div>
+              <div className="text-xs text-slate-500 truncate mt-0.5">{emailLabel}</div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="shrink-0 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold shadow-sm hover:bg-slate-50 active:scale-[0.99] transition"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+
         {fetchError && (
           <div className="mb-4 rounded-3xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm">
             <span className="font-bold">Fetch error:</span> {fetchError}
@@ -1302,7 +1330,11 @@ async function saveEdits() {
               </div>
             </div>
 
-            <InputField label="Name" value={form.person_name} onChange={(v) => setForm((f) => ({ ...f, person_name: v }))} />
+            <InputField
+              label="Name"
+              value={form.person_name}
+              onChange={(v) => setForm((f) => ({ ...f, person_name: v }))}
+            />
 
             <InputField
               label="What Platoon is this person on?"
@@ -1323,8 +1355,7 @@ async function saveEdits() {
                   platoonManualRef.current = false;
                   setForm((f) => ({ ...f, shift_date: e.target.value }));
                 }}
-                className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-slate-900 shadow-sm"
+                className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
               />
             </div>
 
@@ -1335,8 +1366,7 @@ async function saveEdits() {
                   platoonManualRef.current = false;
                   setForm((f) => ({ ...f, shift_type: e.target.value }));
                 }}
-                className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-slate-900 shadow-sm"
+                className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
               >
                 <option value="Day">Day</option>
                 <option value="Night">Night</option>
@@ -1351,7 +1381,11 @@ async function saveEdits() {
               </div>
             </div>
 
-            <TextAreaField label="Notes (optional)" value={form.notes} onChange={(v) => setForm((f) => ({ ...f, notes: v }))} />
+            <TextAreaField
+              label="Notes (optional)"
+              value={form.notes}
+              onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
+            />
 
             <label className="flex items-start gap-3 text-sm text-slate-800">
               <input
@@ -1391,8 +1425,7 @@ async function saveEdits() {
                     setOppositeCandidates([]);
                     setMismatchResolution("");
                   }}
-                  className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                 >
                   Cancel
                 </button>
@@ -1438,16 +1471,14 @@ async function saveEdits() {
                   type="date"
                   value={editForm.shift_date}
                   onChange={(e) => setEditForm((f) => ({ ...f, shift_date: e.target.value }))}
-                  className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-slate-900 shadow-sm"
+                  className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
                 />
               </div>
               <div>
                 <select
                   value={editForm.shift_type}
                   onChange={(e) => setEditForm((f) => ({ ...f, shift_type: e.target.value }))}
-                  className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-slate-900 shadow-sm"
+                  className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
                 >
                   <option value="Day">Day</option>
                   <option value="Night">Night</option>
@@ -1495,8 +1526,7 @@ async function saveEdits() {
                 </button>
                 <button
                   onClick={resetOverlays}
-                  className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                   type="button"
                 >
                   Close
@@ -1506,8 +1536,7 @@ async function saveEdits() {
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => setIsEditing(true)}
-                  className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                   type="button"
                 >
                   Edit
@@ -1522,8 +1551,7 @@ async function saveEdits() {
                       setOppositeCandidates([]);
                       setMismatchResolution("");
                     }}
-                    className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
+                    className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                     type="button"
                   >
                     Settle
@@ -1542,8 +1570,7 @@ async function saveEdits() {
 
                 <button
                   onClick={resetOverlays}
-                  className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                   type="button"
                 >
                   Close
@@ -1570,8 +1597,7 @@ async function saveEdits() {
                       worked_for_me: Boolean(selectedStandby.worked_for_me),
                     });
                   }}
-                  className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                   type="button"
                 >
                   Cancel
@@ -1606,15 +1632,13 @@ function ControlsBar({
         value={searchText}
         onChange={(e) => setSearchText(e.target.value)}
         placeholder="Search…"
-        className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-sm text-slate-900 shadow-sm"
+        className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm shadow-sm"
       />
 
       <select
         value={platoonFilter}
         onChange={(e) => setPlatoonFilter(e.target.value)}
-        className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-sm text-slate-900 shadow-sm"
+        className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm shadow-sm"
       >
         <option value="">All platoons</option>
         {platoonOptions.map((p) => (
@@ -1628,8 +1652,7 @@ function ControlsBar({
         <select
           value={sortMode}
           onChange={(e) => setSortMode(e.target.value)}
-          className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-sm text-slate-900 shadow-sm"
+          className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm shadow-sm"
         >
           <option value="date_desc">Date (newest)</option>
           <option value="date_asc">Date (oldest)</option>
@@ -1645,8 +1668,7 @@ function ControlsBar({
       <button
         type="button"
         onClick={onReset}
-        className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50 active:scale-[0.99] transition"
+        className="rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold shadow-sm hover:bg-slate-50 active:scale-[0.99] transition"
       >
         Reset
       </button>
@@ -1690,8 +1712,7 @@ function AddSettleExistingBlock({
             setForm((f) => ({ ...f, settle_with_existing_id: e.target.value || null }));
             setMismatchResolution("");
           }}
-          className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-slate-900 shadow-sm"
+          className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
         >
           <option value="">— Select —</option>
           {oppositeCandidates.map((s) => (
@@ -1716,7 +1737,9 @@ function AddSettleExistingBlock({
               onClick={() => setMismatchResolution("threeway")}
               className={[
                 "rounded-2xl px-3 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99]",
-                mismatchResolution === "threeway" ? "bg-slate-900 text-white" : "bg-white border border-amber-200 text-amber-900",
+                mismatchResolution === "threeway"
+                  ? "bg-slate-900 text-white"
+                  : "bg-white border border-amber-200 text-amber-900",
               ].join(" ")}
             >
               Three way standby
@@ -1727,7 +1750,9 @@ function AddSettleExistingBlock({
               onClick={() => setMismatchResolution("same")}
               className={[
                 "rounded-2xl px-3 py-2 text-sm font-semibold shadow-sm transition active:scale-[0.99]",
-                mismatchResolution === "same" ? "bg-slate-900 text-white" : "bg-white border border-amber-200 text-amber-900",
+                mismatchResolution === "same"
+                  ? "bg-slate-900 text-white"
+                  : "bg-white border border-amber-200 text-amber-900",
               ].join(" ")}
             >
               It’s the same person
@@ -1781,8 +1806,7 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
             type="date"
             value={mini.shift_date}
             onChange={(e) => setMini((m) => ({ ...m, shift_date: e.target.value }))}
-            className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-slate-900 shadow-sm"
+            className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
           />
         </div>
 
@@ -1790,8 +1814,7 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
           <select
             value={mini.shift_type}
             onChange={(e) => setMini((m) => ({ ...m, shift_type: e.target.value }))}
-            className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-slate-900 shadow-sm"
+            className="w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
           >
             <option value="Day">Day</option>
             <option value="Night">Night</option>
@@ -1847,8 +1870,7 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
           </button>
           <button
             onClick={onBack}
-            className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
+            className="flex-1 rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
             type="button"
           >
             Back
@@ -1919,8 +1941,7 @@ function InputField({ label, value, onChange, placeholder }) {
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-slate-900 shadow-sm"
+        className="mt-1 w-full rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
       />
     </div>
   );
@@ -1933,8 +1954,7 @@ function TextAreaField({ label, value, onChange }) {
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full min-h-[90px] rounded-2xl border border-slate-200 bg-white text-slate-900 px-3
- py-2 text-slate-900 shadow-sm"
+        className="mt-1 w-full min-h-[90px] rounded-2xl border border-slate-200 bg-white text-slate-900 px-3 py-2 shadow-sm"
       />
     </div>
   );
