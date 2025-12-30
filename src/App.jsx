@@ -11,18 +11,20 @@ export default function App() {
   useEffect(() => {
     let alive = true;
 
-    // Initial load (for refreshes)
-    supabase.auth.getSession().then(({ data, error }) => {
+    (async () => {
+      const { data, error } = await supabase.auth.getSession();
       if (error) console.error("getSession error:", error);
+
+      // CRITICAL: Don't overwrite an existing session with null
       if (alive) {
-        setSession(data?.session ?? null);
+        setSession((prev) => prev ?? data?.session ?? null);
         setLoading(false);
       }
-    });
+    })();
 
-    // Backup listener
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
+      // CRITICAL: Some events can deliver null; don't clobber a real session.
+      setSession((prev) => newSession ?? prev ?? null);
     });
 
     return () => {
@@ -33,13 +35,23 @@ export default function App() {
 
   if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
 
-<div style={{ padding: 8, fontSize: 12, color: "#666" }}>
-  Session: {session ? "YES" : "NO"}
-</div>
+  return (
+    <div>
+      {/* TEMP DEBUG: leave this in until everything works */}
+      <div style={{ padding: 8, fontSize: 12, color: "#666" }}>
+        Auth session: {session ? "YES" : "NO"}
+      </div>
 
-  if (!session) {
-    return <Login onAuthed={(s) => setSession(s)} />;
-  }
-
-  return <StandbyList />;
+      {!session ? (
+        <Login
+          onAuthed={(s) => {
+            // Set immediately and don’t let anything wipe it
+            setSession(s);
+          }}
+        />
+      ) : (
+        <StandbyList />
+      )}
+    </div>
+  );
 }
