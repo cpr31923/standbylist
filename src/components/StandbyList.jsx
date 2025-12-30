@@ -92,6 +92,28 @@ function StatusPill({ text }) {
   return <span className={`${base} ${cls}`}>{text}</span>;
 }
 
+function firstName(full) {
+  const s = String(full || "").trim();
+  if (!s) return "—";
+  return s.split(/\s+/)[0];
+}
+
+function rowSentence(s) {
+  const name = firstName(s?.person_name);
+  const date = formatDisplayDate(s?.shift_date);
+  const platoon = formatPlatoonLabel(s?.duty_platoon || s?.platoon); // prefer duty_platoon if present
+  const st = shiftTypeShort(s);
+  const stPart = st ? ` ${st}` : "";
+
+  // worked_for_me === true  => they worked for you (so you owe them)
+  // worked_for_me === false => you worked for them (so they owe you)
+  if (s?.worked_for_me) {
+    return `${name} worked for you on ${date} - ${platoon}${stPart}.`;
+  }
+  return `You worked for ${name} on ${date} - ${platoon}${stPart}.`;
+}
+
+
 export default function StandbyList() {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
@@ -1144,7 +1166,9 @@ export default function StandbyList() {
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-[15px] font-semibold text-slate-900 truncate">{toTitleCase(s.person_name)}</div>
-              <div className="text-[12px] text-slate-500 truncate">{formatPlatoonLabel(s.platoon)}</div>
+              <div className="text-[12px] text-slate-500 truncate">
+                {rowSentence(s)}
+                </div>
               <div className="text-[11px] text-slate-400 mt-0.5">
                 {formatDisplayDate(s.shift_date)}
                 {shiftTypeShort(s) ? ` • ${shiftTypeShort(s)}` : ""}
