@@ -1,14 +1,22 @@
+// src/supabaseClient.js
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = "https://gmtmzifpiagbayqospbh.supabase.co";
-const supabaseAnonKey =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdtdG16aWZwaWFnYmF5cW9zcGJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4MzIyMDgsImV4cCI6MjA4MjQwODIwOH0.IdUYJFJqrFavugX31PdXO04QQLZ2kN6cXuglgC1dJTA";
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  // This will make failures obvious in dev + on Vercel logs
+  console.error("Missing Supabase env vars:", {
+    VITE_SUPABASE_URL: supabaseUrl,
+    VITE_SUPABASE_ANON_KEY: supabaseAnonKey ? "present" : "missing",
+  });
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    storage: window.localStorage,      // <- persist session here
-    persistSession: true,              // <- keep session across refresh
-    autoRefreshToken: true,            // <- refresh before expiry
-    detectSessionInUrl: true,          // <- supports magic links / oauth redirects
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: window.localStorage,
   },
 });

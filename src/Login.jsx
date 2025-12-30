@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 
-export default function Login({ onAuthed }) {
+export default function Login() {
   const [mode, setMode] = useState("signin"); // signin | signup | reset
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -10,11 +10,17 @@ export default function Login({ onAuthed }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  const [debugSession, setDebugSession] = useState("unknown");
 
   useEffect(() => {
     setMsg("");
     setErr("");
   }, [mode]);
+
+  async function refreshDebugSession() {
+    const { data } = await supabase.auth.getSession();
+    setDebugSession(data?.session ? "YES" : "NO");
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -35,40 +41,26 @@ export default function Login({ onAuthed }) {
         });
         if (error) throw error;
 
-        // Always fetch the session after sign-in (more reliable than trusting returned data)
-        const { data: sessData, error: sessErr } = await supabase.auth.getSession();
-        if (sessErr) throw sessErr;
-
-        if (!sessData?.session) {
-          throw new Error("Signed in but no session found. Check Supabase client config.");
-        }
-
-        onAuthed?.(sessData.session);
         setMsg("Signed in.");
+        await refreshDebugSession();
       }
 
       if (mode === "signup") {
         const { data, error } = await supabase.auth.signUp({
           email: cleanEmail,
           password,
-          options: {
-            emailRedirectTo: window.location.origin,
-          },
+          options: { emailRedirectTo: window.location.origin },
         });
-
         if (error) throw error;
 
-        // If confirmations are OFF, you may get a session immediately
         if (data?.session) {
-          onAuthed?.(data.session);
           setMsg("Account created and signed in.");
         } else {
-          // If confirmations are ON (or email exists and Supabase avoids enumerating),
-          // you might not get a session here.
           setMsg(
             "If this email is new, check your inbox to confirm your account. If you already have an account, use Sign in or Forgot password."
           );
         }
+        await refreshDebugSession();
       }
 
       if (mode === "reset") {
@@ -90,6 +82,18 @@ export default function Login({ onAuthed }) {
     <div style={styles.wrap}>
       <div style={styles.card}>
         <h1 style={styles.title}>Standby Me</h1>
+
+        {/* Debug line so we can SEE what Login/Supabase sees */}
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
+          Login sees session: <b>{debugSession}</b>
+          <button
+            type="button"
+            onClick={refreshDebugSession}
+            style={{ marginLeft: 10, fontSize: 12 }}
+          >
+            Refresh
+          </button>
+        </div>
 
         <div style={styles.tabs}>
           <button
@@ -157,8 +161,7 @@ export default function Login({ onAuthed }) {
         </form>
 
         <p style={styles.help}>
-          Tip: If sign up says “check your email”, confirm the email first, then
-          come back and sign in.
+          Tip: If sign up says “check your email”, confirm the email first, then come back and sign in.
         </p>
       </div>
     </div>
@@ -183,12 +186,7 @@ const styles = {
     boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
   },
   title: { margin: "0 0 12px", fontSize: 28 },
-  tabs: {
-    display: "flex",
-    gap: 8,
-    marginBottom: 14,
-    flexWrap: "wrap",
-  },
+  tabs: { display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" },
   tab: {
     border: "1px solid #ddd",
     borderRadius: 999,
@@ -197,9 +195,7 @@ const styles = {
     cursor: "pointer",
     fontSize: 14,
   },
-  tabActive: {
-    borderColor: "#111",
-  },
+  tabActive: { borderColor: "#111" },
   form: { display: "flex", flexDirection: "column", gap: 12 },
   label: { display: "flex", flexDirection: "column", gap: 6, fontSize: 14 },
   input: {
