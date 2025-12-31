@@ -2,6 +2,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient";
 import CalendarView from "./CalendarView";
+import { fetchStandbyById } from "./standby/data";
+
+
+import {
+  todayYMD,
+  isFuture,
+  formatPlatoonLabel,
+  formatDisplayDate,
+  normalizeName,
+  toTitleCase,
+  toTitleCaseLive,
+  makeUUID,
+  shiftTypeShort,
+  firstName,
+  openStandbyDetailById,
+} from "./standby/helpers";
+
+import { detailNarrative } from "./standby/narratives";
+import ListRowCompact from "./standby/ListRowCompact";
+import FiltersBar from "./standby/FiltersBar";
+import Drawer from "./standby/drawer";
 
 /**
  * standby_events columns assumed:
@@ -21,87 +42,6 @@ import CalendarView from "./CalendarView";
  * - deleted_at (timestamptz, nullable)
  */
 
-function todayYMD() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function isFuture(ymd) {
-  if (!ymd) return true;
-  return String(ymd) > todayYMD();
-}
-
-function formatPlatoonLabel(platoon) {
-  if (!platoon) return "-";
-  const p = String(platoon).trim();
-  return /platoon/i.test(p) ? p : `${p} Platoon`;
-}
-
-function formatDisplayDate(ymd) {
-  if (!ymd) return "-";
-  const d = new Date(`${ymd}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return ymd;
-  return d.toLocaleDateString("en-AU", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function normalizeName(s) {
-  return String(s || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-}
-
-function toTitleCase(s) {
-  const raw = String(s || "").trim().replace(/\s+/g, " ");
-  if (!raw) return "";
-  return raw
-    .split(" ")
-    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
-    .join(" ");
-}
-
-function toTitleCaseLive(input) {
-  const raw = String(input || "").replace(/\s+/g, " ");
-  if (!raw) return "";
-
-  const endsWithSpace = /\s$/.test(input);
-  const core = raw.trim();
-
-  const titled = core
-    .split(" ")
-    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
-    .join(" ");
-
-  return endsWithSpace ? `${titled} ` : titled;
-}
-
-function makeUUID() {
-  if (crypto?.randomUUID) return crypto.randomUUID();
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
-
-function shiftTypeShort(row) {
-  const t = (row?.shift_type || "").trim();
-  return t ? t : "";
-}
-
-function firstName(full) {
-  const s = String(full || "").trim();
-  if (!s) return "—";
-  return s.split(/\s+/)[0];
-}
-
 function StatusPill({ text }) {
   const base =
     "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap";
@@ -113,76 +53,14 @@ function StatusPill({ text }) {
     : "bg-slate-100 text-slate-700";
   return <span className={`${base} ${cls}`}>{text}</span>;
 }
-function nameWithPlatoon(s) {
-  const nameFull = toTitleCase(s?.person_name || "—");
-  const p = formatPlatoonLabel(s?.platoon);
-  return `${nameFull} (${p})`;
-}
-
-function rowSentence(s) {
-  // Deleted standbys: show date + shift type only (no narrative)
-  if (s?.deleted_at) {
-    const date = formatDisplayDate(s?.shift_date);
-    const st = shiftTypeShort(s);
-    return `${date}${st ? ` ${st}` : ""}`;
-  }
-
-  const who = nameWithPlatoon(s);
-  const first = firstName(s?.person_name);
-  const date = formatDisplayDate(s?.shift_date);
-  const dutyPlatoon = formatPlatoonLabel(s?.duty_platoon || s?.platoon);
-  const st = shiftTypeShort(s);
-  const stPart = st ? ` ${st}` : "";
-  const future = isFuture(s?.shift_date);
-
-  // If settled and paired, show the "Once/After..." style summary (same as detail modal intent)
-  if (s?.settled && s?.settlement_group_id) {
-    const other = findPartnerShift(s);
-    if (other) {
-      const myDate = String(s.shift_date || "");
-      const otherDate = String(other.shift_date || "");
-      const isSettlingShift =
-        myDate > otherDate || (myDate === otherDate && String(s.id) > String(other.id));
-
-      if (isSettlingShift) {
-        const alreadyHappened = !isFuture(s.shift_date);
-
-        if (s.worked_for_me) {
-          // they work for you (you owed them) — settling shift is them working for you
-          return alreadyHappened
-            ? `After ${first} worked for you on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
-            : `Once ${first} works for you on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
-        }
-
-        // you work for them
-        return alreadyHappened
-          ? `After you worked for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
-          : `Once you work for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
-      }
-      // obligation shift: keep plain wording
-    }
-  }
-
-  // worked_for_me === true  => they worked for you (so you owe them)
-  // worked_for_me === false => you worked for them (so they owe you)
-  if (s?.worked_for_me) {
-    return future
-      ? `${who} will work for you on ${date} - ${dutyPlatoon}${stPart}. You will owe them a shift.`
-      : `${who} worked for you on ${date} - ${dutyPlatoon}${stPart}. You owe them a shift.`;
-  }
-
-  return future
-    ? `You will work for ${who} on ${date} - ${dutyPlatoon}${stPart}. They will owe you a shift.`
-    : `You worked for ${who} on ${date} - ${dutyPlatoon}${stPart}. They owe you a shift.`;
-}
 
 export default function StandbyList() {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
 
   // overall summary (unsettled, not deleted)
-  const [overallPlus, setOverallPlus] = useState(0); // they owe me (worked_for_me=false)
-  const [overallMinus, setOverallMinus] = useState(0); // I owe (worked_for_me=true)
+  const [overallPlus, setOverallPlus] = useState(0); // they owe me
+  const [overallMinus, setOverallMinus] = useState(0); // I owe
 
   // Calendar sub-tabs + home platoon
   const [calendarSubtab, setCalendarSubtab] = useState("shift"); // shift | mine
@@ -249,14 +127,45 @@ export default function StandbyList() {
   const [editForm, setEditForm] = useState({
     person_name: "",
     platoon: "",
-    duty_platoon: "",
     shift_date: "",
     shift_type: "Day",
     notes: "",
     worked_for_me: false,
   });
 
+async function openDetail(row) {
+  const id = row?.id;
+  if (!id) return;
+
+  // Open immediately so UX never feels dead
+  setDrawerOpen(false);
+  setShowAddModal(false);
+  setIsEditing(false);
+  setSettleFlowOpen(false);
+  setSettleChoice(null);
+  setSettleWithExistingId(null);
+  setOppositeCandidates([]);
+  setMismatchResolution("");
+
+  // set something immediately (even if partial)
+  setSelectedStandby(row);
+
+  // hydrate full row
+  const { data, error } = await fetchStandbyById(id);
+  if (error) {
+    console.error("Fetch standby detail error:", error);
+    // keep modal open with the partial row instead of crashing
+    return;
+  }
+  setSelectedStandby(data);
+}
+
+
+
   const [refreshTick, setRefreshTick] = useState(0);
+
+  const defaultSort = section === "upcoming" ? "date_asc" : "date_desc";
+  const showSort = true;
 
   // -----------------------------
   // Load & persist Home Platoon (localStorage)
@@ -265,9 +174,7 @@ export default function StandbyList() {
     try {
       const saved = localStorage.getItem("shift-iou-home-platoon") || "";
       if (saved) setHomePlatoon(saved);
-    } catch (e) {
-      // ignore
-    }
+    } catch {}
   }, []);
 
   function saveHomePlatoon(next) {
@@ -275,9 +182,7 @@ export default function StandbyList() {
     setHomePlatoon(v);
     try {
       localStorage.setItem("shift-iou-home-platoon", v);
-    } catch (e) {
-      // ignore
-    }
+    } catch {}
   }
 
   // -----------------------------
@@ -455,26 +360,42 @@ export default function StandbyList() {
   }
 
   function listTitle() {
-    if (section === "standbys") return standbysSubtab === "owed" ? "Standbys - Owed to me" : "Standbys - I owe";
-    if (section === "upcoming") return upcomingSubtab === "i_work" ? "Upcoming Standbys I've Agreed To" : "Upcoming Standbys I've Requested";
+    if (section === "standbys")
+      return standbysSubtab === "owed"
+        ? "Standbys - Owed to me"
+        : "Standbys - I owe";
+    if (section === "upcoming")
+      return upcomingSubtab === "i_work"
+        ? "Upcoming Standbys I've Agreed To"
+        : "Upcoming Standbys I've Requested";
     return historySubtab === "settled" ? "Settled" : "Deleted";
   }
 
   function totalLabel() {
-    if (section === "standbys" && standbysSubtab === "owed") return "Total standbys owed to me:";
-    if (section === "standbys" && standbysSubtab === "owe") return "Total standbys I owe:";
-    if (section === "upcoming" && upcomingSubtab === "they_work") return "Total upcoming shifts off:";
-    if (section === "upcoming" && upcomingSubtab === "i_work") return "Total upcoming shifts I’ve agreed to:";
-    if (section === "history" && historySubtab === "settled") return "Total settled:";
+    if (section === "standbys" && standbysSubtab === "owed")
+      return "Total standbys owed to me:";
+    if (section === "standbys" && standbysSubtab === "owe")
+      return "Total standbys I owe:";
+    if (section === "upcoming" && upcomingSubtab === "they_work")
+      return "Total upcoming shifts off:";
+    if (section === "upcoming" && upcomingSubtab === "i_work")
+      return "Total upcoming shifts I’ve agreed to:";
+    if (section === "history" && historySubtab === "settled")
+      return "Total settled:";
     return "Total deleted:";
   }
 
   function emptyText() {
-    if (section === "standbys" && standbysSubtab === "owed") return "No one owes you a shift currently.";
-    if (section === "standbys" && standbysSubtab === "owe") return "You don't owe anyone a shift currently.";
-    if (section === "upcoming" && upcomingSubtab === "i_work") return "No upcoming shift commitments 🎉";
-    if (section === "upcoming" && upcomingSubtab === "they_work") return "No upcoming shifts off ☹️";
-    if (section === "history" && historySubtab === "settled") return "Settled shifts will appear here.";
+    if (section === "standbys" && standbysSubtab === "owed")
+      return "No one owes you a shift currently.";
+    if (section === "standbys" && standbysSubtab === "owe")
+      return "You don't owe anyone a shift currently.";
+    if (section === "upcoming" && upcomingSubtab === "i_work")
+      return "No upcoming shift commitments 🎉";
+    if (section === "upcoming" && upcomingSubtab === "they_work")
+      return "No upcoming shifts off ☹️";
+    if (section === "history" && historySubtab === "settled")
+      return "Settled shifts will appear here.";
     return "Deleted shifts will appear here.";
   }
 
@@ -488,79 +409,78 @@ export default function StandbyList() {
     const tense = isFuture(dateYMD) ? "will be" : "was";
     const sp = dutyPlatoon ? formatPlatoonLabel(dutyPlatoon) : "—";
     const st = shiftType ? String(shiftType) : "—";
-    return `This shift ${tense} a: ${sp} ${st.toLowerCase()} shift`;
+    return `This ${tense} a ${sp} ${st.toLowerCase()} shift`;
   }
 
   // -----------------------------
-  // Detail narrative
+  // Partner lookup + row sentence
   // -----------------------------
-  function findPartnerShift(s) {
-    if (!s?.settlement_group_id) return null;
-    const gid = s.settlement_group_id;
-    const groupRows = standbys.filter((r) => r.settlement_group_id === gid && r.id !== s.id);
-    return groupRows.length ? groupRows[0] : null;
+  function findPartnerShift(row) {
+    if (!row?.settlement_group_id) return null;
+    const gid = row.settlement_group_id;
+    const other = standbys.find(
+      (r) => r.settlement_group_id === gid && r.id !== row.id
+    );
+    return other || null;
   }
 
-function nameWithPlatoon(s) {
-  const full = toTitleCase(s?.person_name || "");
-  const p = formatPlatoonLabel(s?.platoon);
-  return `${full} (${p})`;
-}
+  function nameWithPlatoonLocal(row) {
+    const nameFull = toTitleCase(row?.person_name || "—");
+    const p = formatPlatoonLabel(row?.platoon);
+    return `${nameFull} (${p})`;
+  }
 
-
-  function detailNarrative(s) {
-      const nameFull = toTitleCase(s?.person_name || "—");
-      const name = firstName(nameFull);
-      const platoon = formatPlatoonLabel(s?.platoon);
-      const date = formatDisplayDate(s?.shift_date);
-      const st = shiftTypeShort(s);
-      const stPart = st ? ` ${st}` : "";
-      const future = isFuture(s?.shift_date);
-
-
-    // Deleted: keep it simple
-    if (s?.deleted_at) {
-      return `Deleted standby: ${date}${stPart}.`;
+  function rowSentence(row) {
+    if (row?.deleted_at) {
+      const date = formatDisplayDate(row?.shift_date);
+      const st = shiftTypeShort(row);
+      return `${date}${st ? ` ${st}` : ""}`;
     }
 
-    // If this shift is settled AND has a partner, write the "pair-style" messaging
-    if (s?.settled && s?.settlement_group_id) {
-      const other = findPartnerShift(s);
+    const who = nameWithPlatoonLocal(row);
+    const first = firstName(row?.person_name);
+    const date = formatDisplayDate(row?.shift_date);
+    const dutyPlatoon = formatPlatoonLabel(row?.duty_platoon || row?.platoon);
+    const st = shiftTypeShort(row);
+    const stPart = st ? ` ${st}` : "";
+    const future = isFuture(row?.shift_date);
 
+    if (row?.settled && row?.settlement_group_id) {
+      const other = findPartnerShift(row);
       if (other) {
-        const myDate = String(s.shift_date || "");
+        const myDate = String(row.shift_date || "");
         const otherDate = String(other.shift_date || "");
         const isSettlingShift =
-          myDate > otherDate || (myDate === otherDate && String(s.id) > String(other.id));
+          myDate > otherDate ||
+          (myDate === otherDate && String(row.id) > String(other.id));
 
-        if (!isSettlingShift) {
-          if (s.worked_for_me) {
-            return `const who = nameWithPlatoon(s); worked for you on ${date}${stPart}.`;
+        if (isSettlingShift) {
+          const alreadyHappened = !isFuture(row.shift_date);
+
+          if (row.worked_for_me) {
+            return alreadyHappened
+              ? `After ${first} worked for you on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
+              : `Once ${first} works for you on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
           }
-          return `You worked for const who = nameWithPlatoon(s); on ${date}${stPart}.`;
-        }
 
-        const settledAlready = !isFuture(s.shift_date);
-        if (s.worked_for_me) {
-          return settledAlready
-            ? `After ${name} worked for you on ${date}${stPart}, your shifts are settled.`
-            : `Once ${name} works for you on ${date}${stPart}, your shifts will be settled.`;
+          return alreadyHappened
+            ? `After you worked for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
+            : `Once you work for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
         }
-
-        return settledAlready
-          ? `After you worked for ${name} on ${date}${stPart}, your shifts are settled.`
-          : `Once you work for ${name} on ${date}${stPart}, your shifts will be settled.`;
       }
     }
 
-    // Unsettled (or settled single without partner) keeps the owe/owed wording
-    if (s?.worked_for_me) {
-      if (future) return `const who = nameWithPlatoon(s); will work for you on ${date}${stPart}. You will owe them a shift.`;
-      return `const who = nameWithPlatoon(s); worked for you on ${date}${stPart}. You owe them a shift.`;
+    // worked_for_me === true  => they worked for you (you owe them)
+    // worked_for_me === false => you worked for them (they owe you)
+    if (row?.worked_for_me) {
+      return future
+        ? `${who} will work for you on ${date} - ${dutyPlatoon}${stPart}. You will owe them a shift.`
+        : `${who} worked for you on ${date} - ${dutyPlatoon}${stPart}. You owe them a shift.`;
     }
 
-    if (future) return `You will work for const who = nameWithPlatoon(s); on ${date}${stPart}. They will owe you a shift.`;
-    return `You worked for const who = nameWithPlatoon(s); on ${date}${stPart}. They owe you a shift.`;
+    return future
+      ? `You will work for ${who} on ${date} - ${dutyPlatoon}${stPart}. They will owe you a shift.`
+      : `You worked for ${who} on ${date} - ${dutyPlatoon}${stPart}. They owe you a shift.`;
   }
 
   // -----------------------------
@@ -576,7 +496,6 @@ function nameWithPlatoon(s) {
     setEditForm({
       person_name: selectedStandby.person_name || "",
       platoon: selectedStandby.platoon || "",
-      duty_platoon: selectedStandby.duty_platoon || "",
       shift_date: selectedStandby.shift_date || "",
       shift_type: selectedStandby.shift_type || "Day",
       notes: selectedStandby.notes || "",
@@ -585,7 +504,7 @@ function nameWithPlatoon(s) {
   }, [selectedStandby]);
 
   // -----------------------------
-  // Fetch standbys (by section/subtab)
+  // Fetch standbys
   // -----------------------------
   useEffect(() => {
     if (!user?.id) {
@@ -599,28 +518,31 @@ function nameWithPlatoon(s) {
       setLoading(true);
       setFetchError(null);
 
-      let query = supabase.from("standby_events").select("*").eq("user_id", user.id);
+      let query = supabase
+        .from("standby_events")
+        .select("*")
+        .eq("user_id", user.id);
 
-      // deleted vs not deleted
       if (section === "history" && historySubtab === "deleted") {
         query = query.not("deleted_at", "is", null);
       } else {
         query = query.is("deleted_at", null);
       }
 
-      // STANDBYS
       if (section === "standbys") {
-        if (standbysSubtab === "owed") query = query.eq("settled", false).eq("worked_for_me", false);
-        if (standbysSubtab === "owe") query = query.eq("settled", false).eq("worked_for_me", true);
+        if (standbysSubtab === "owed")
+          query = query.eq("settled", false).eq("worked_for_me", false);
+        if (standbysSubtab === "owe")
+          query = query.eq("settled", false).eq("worked_for_me", true);
       }
 
-      // UPCOMING
       if (section === "upcoming") {
-        if (upcomingSubtab === "i_work") query = query.eq("worked_for_me", false).gt("shift_date", todayYMD());
-        if (upcomingSubtab === "they_work") query = query.eq("worked_for_me", true).gt("shift_date", todayYMD());
+        if (upcomingSubtab === "i_work")
+          query = query.eq("worked_for_me", false).gt("shift_date", todayYMD());
+        if (upcomingSubtab === "they_work")
+          query = query.eq("worked_for_me", true).gt("shift_date", todayYMD());
       }
 
-      // HISTORY (settled)
       if (section === "history" && historySubtab === "settled") {
         query = query.eq("settled", true);
       }
@@ -680,8 +602,8 @@ function nameWithPlatoon(s) {
       let plus = 0;
       let minus = 0;
       for (const r of data || []) {
-        if (r.worked_for_me) minus += 1; // I owe them
-        else plus += 1; // they owe me
+        if (r.worked_for_me) minus += 1;
+        else plus += 1;
       }
 
       setOverallPlus(plus);
@@ -690,7 +612,7 @@ function nameWithPlatoon(s) {
   }, [user?.id, refreshTick]);
 
   // -----------------------------
-  // Platoon auto-fill from roster function
+  // Platoon auto-fill (roster function)
   // -----------------------------
   async function maybeAutofillPlatoon(dateYMD, shiftType) {
     if (!dateYMD || !shiftType) return;
@@ -800,7 +722,11 @@ function nameWithPlatoon(s) {
   // Settlement actions
   // -----------------------------
   async function applyThreeWayNoteToIds(ids) {
-    const { data: rows, error } = await supabase.from("standby_events").select("id, notes").in("id", ids);
+    const { data: rows, error } = await supabase
+      .from("standby_events")
+      .select("id, notes")
+      .in("id", ids);
+
     if (error) {
       console.error("Fetch notes for three-way error:", error);
       return;
@@ -819,7 +745,10 @@ function nameWithPlatoon(s) {
     });
 
     for (const u of updates) {
-      const { error: upErr } = await supabase.from("standby_events").update({ notes: u.notes }).eq("id", u.id);
+      const { error: upErr } = await supabase
+        .from("standby_events")
+        .update({ notes: u.notes })
+        .eq("id", u.id);
       if (upErr) console.error("Three-way note update error:", upErr);
     }
   }
@@ -869,7 +798,9 @@ function nameWithPlatoon(s) {
   async function unsettleGroup(groupId) {
     if (!groupId) return;
 
-    const ok = window.confirm("Unsettle this group? This will return both shifts to their owed/owing lists.");
+    const ok = window.confirm(
+      "Unsettle this group? This will return both shifts to their owed/owing lists."
+    );
     if (!ok) return;
 
     const { error } = await supabase
@@ -899,7 +830,9 @@ function nameWithPlatoon(s) {
   async function deleteStandby(id) {
     if (!id) return;
 
-    const ok = window.confirm("Delete this standby? You can restore it later from History → Deleted.");
+    const ok = window.confirm(
+      "Delete this standby? You can restore it later from History → Deleted."
+    );
     if (!ok) return;
 
     const { data: row, error: rowErr } = await supabase
@@ -915,7 +848,11 @@ function nameWithPlatoon(s) {
     if (row?.deleted_at) return;
 
     const nowIso = new Date().toISOString();
-    const { error: delErr } = await supabase.from("standby_events").update({ deleted_at: nowIso }).eq("id", id);
+    const { error: delErr } = await supabase
+      .from("standby_events")
+      .update({ deleted_at: nowIso })
+      .eq("id", id);
+
     if (delErr) {
       console.error("Soft delete error:", delErr);
       return;
@@ -929,7 +866,9 @@ function nameWithPlatoon(s) {
         .is("deleted_at", null);
 
       if (!otherErr) {
-        const otherIds = (others || []).map((r) => r.id).filter((rid) => rid !== id);
+        const otherIds = (others || [])
+          .map((r) => r.id)
+          .filter((rid) => rid !== id);
         if (otherIds.length > 0) {
           const { error: unlinkErr } = await supabase
             .from("standby_events")
@@ -941,7 +880,8 @@ function nameWithPlatoon(s) {
             })
             .in("id", otherIds);
 
-          if (unlinkErr) console.error("Unsettle remaining after delete error:", unlinkErr);
+          if (unlinkErr)
+            console.error("Unsettle remaining after delete error:", unlinkErr);
         }
       }
     }
@@ -953,7 +893,10 @@ function nameWithPlatoon(s) {
   async function restoreStandby(id) {
     if (!id) return;
 
-    const { error } = await supabase.from("standby_events").update({ deleted_at: null }).eq("id", id);
+    const { error } = await supabase
+      .from("standby_events")
+      .update({ deleted_at: null })
+      .eq("id", id);
 
     if (error) {
       console.error("Restore error:", error);
@@ -1033,7 +976,11 @@ function nameWithPlatoon(s) {
     if (!payload.shift_date) return alert("Please select a date.");
     if (!payload.shift_type) return alert("Please select Day or Night.");
 
-    const { data: inserted, error } = await supabase.from("standby_events").insert([payload]).select("*").single();
+    const { data: inserted, error } = await supabase
+      .from("standby_events")
+      .insert([payload])
+      .select("*")
+      .single();
 
     if (error) {
       console.error("Insert error:", error);
@@ -1081,9 +1028,7 @@ function nameWithPlatoon(s) {
       });
 
       if (!dutyErr && dutyData) updates.duty_platoon = String(dutyData);
-    } catch (err) {
-      // silent
-    }
+    } catch {}
 
     const { data, error } = await supabase
       .from("standby_events")
@@ -1124,7 +1069,11 @@ function nameWithPlatoon(s) {
   async function createShiftAndSettleWithSelected(newShiftPayload, threeWay) {
     if (!selectedStandby) return;
 
-    const { data: inserted, error } = await supabase.from("standby_events").insert([newShiftPayload]).select("*").single();
+    const { data: inserted, error } = await supabase
+      .from("standby_events")
+      .insert([newShiftPayload])
+      .select("*")
+      .single();
 
     if (error) {
       console.error("Insert (settle new shift) error:", error);
@@ -1194,10 +1143,9 @@ function nameWithPlatoon(s) {
     let n = 0;
     if (String(searchText || "").trim()) n++;
     if (String(platoonFilter || "").trim()) n++;
-    const defaultSort = section === "upcoming" ? "date_asc" : "date_desc";
     if (sortMode !== defaultSort) n++;
     return n;
-  }, [searchText, platoonFilter, sortMode, section]);
+  }, [searchText, platoonFilter, sortMode, defaultSort]);
 
   // -----------------------------
   // History grouping (settled only)
@@ -1242,461 +1190,49 @@ function nameWithPlatoon(s) {
   }, [standbys, section, historySubtab]);
 
   // -----------------------------
-  // Drawer (collapsible submenu)
-  // -----------------------------
-  function Drawer() {
-    if (!drawerOpen) return null;
-
-    const emailLabel = session?.user?.email || user?.email || "Signed in";
-
-    const Group = ({ id, title, children }) => {
-      const open = drawerGroup === id;
-      return (
-        <div className="mb-1">
-          <button
-            type="button"
-            onClick={() => setDrawerGroup((cur) => (cur === id ? "" : id))}
-            className="w-full flex items-center justify-between px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 rounded-md"
-          >
-            <span>{title}</span>
-            <span className="text-slate-400">{open ? "▾" : "▸"}</span>
-          </button>
-          {open && <div className="ml-2 mt-1 border-l border-slate-200 pl-2">{children}</div>}
-        </div>
-      );
-    };
-
-    const SubItem = ({ label, active, onClick }) => (
-      <button
-        type="button"
-        onClick={onClick}
-        className={[
-          "w-full text-left px-3 py-2 text-sm rounded-md transition",
-          active ? "bg-slate-100 text-slate-900 font-semibold" : "text-slate-700 hover:bg-slate-50",
-        ].join(" ")}
-      >
-        {label}
-      </button>
-    );
-
-    return (
-      <div className="fixed inset-0 z-50">
-        <div className="absolute inset-0 bg-black/25" onMouseDown={() => setDrawerOpen(false)} />
-        <div className="absolute inset-y-0 left-0 w-[80%] max-w-[330px] bg-white text-slate-900 shadow-xl border-r border-slate-200 flex flex-col">
-          <div className="px-4 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-lg font-extrabold text-slate-900 leading-tight">Shift IOU</div>
-              <div className="text-[12px] text-slate-500 truncate mt-0.5">{emailLabel}</div>
-
-              <div className="mt-2">
-                <div className="text-[11px] font-semibold text-slate-500">Overall Standby Position:</div>
-                <div className="mt-0.5 text-base font-extrabold tracking-tight">
-                  <span className={overallPlus > 0 ? "text-emerald-600" : "text-slate-700"}>owed {overallPlus}</span>
-                  <span className="text-slate-400"> / </span>
-                  <span className={overallMinus > 0 ? "text-rose-600" : "text-slate-700"}>owe {overallMinus}</span>
-                </div>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setDrawerOpen(false)}
-              className="rounded-md p-2 text-slate-700 hover:bg-slate-100 active:scale-[0.98] transition"
-              aria-label="Close menu"
-            >
-              ✕
-            </button>
-          </div>
-
-          <div className="px-4 py-3 border-b border-slate-100">
-            <button
-              type="button"
-              onClick={() => openAddStandbyModal()}
-              className="w-full rounded-md bg-slate-900 text-white px-3 py-2.5 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
-            >
-              + Add Standby
-            </button>
-          </div>
-
-          <div className="px-3 py-3 overflow-y-auto">
-            <Group id="standbys" title="Standbys">
-              <SubItem
-                label="Owed to me"
-                active={section === "standbys" && standbysSubtab === "owed"}
-                onClick={() => goStandbys("owed")}
-              />
-              <SubItem
-                label="I owe"
-                active={section === "standbys" && standbysSubtab === "owe"}
-                onClick={() => goStandbys("owe")}
-              />
-            </Group>
-
-            <Group id="upcoming" title="Upcoming">
-              <SubItem
-                label="Shifts I have to work"
-                active={section === "upcoming" && upcomingSubtab === "i_work"}
-                onClick={() => goUpcoming("i_work")}
-              />
-              <SubItem
-                label="Shifts off"
-                active={section === "upcoming" && upcomingSubtab === "they_work"}
-                onClick={() => goUpcoming("they_work")}
-              />
-            </Group>
-
-            <Group id="calendar" title="Calendar">
-              <SubItem
-                label="Shift calendar"
-                active={section === "calendar" && calendarSubtab === "shift"}
-                onClick={() => goCalendar("shift")}
-              />
-              <SubItem
-                label="My calendar"
-                active={section === "calendar" && calendarSubtab === "mine"}
-                onClick={() => goCalendar("mine")}
-              />
-            </Group>
-
-            <Group id="history" title="History">
-              <SubItem
-                label="Settled"
-                active={section === "history" && historySubtab === "settled"}
-                onClick={() => goHistory("settled")}
-              />
-              <SubItem
-                label="Deleted"
-                active={section === "history" && historySubtab === "deleted"}
-                onClick={() => goHistory("deleted")}
-              />
-            </Group>
-          </div>
-
-          <div className="mt-auto px-4 py-4 border-t border-slate-100 space-y-2">
-            <button
-              type="button"
-              onClick={goSettings}
-              className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-            >
-              Settings
-            </button>
-
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-            >
-              Sign out
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // -----------------------------
-  // Compact row (list look)
-  // -----------------------------
-  function ListRowCompact({ s }) {
-    return (
-      <button
-        onClick={() => setSelectedStandby((prev) => (prev?.id === s.id ? null : s))}
-        className="w-full text-left"
-        type="button"
-      >
-        <div className="px-3 py-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-[15px] font-semibold text-slate-900 truncate">{toTitleCase(s.person_name)}</div>
-              <div className="text-[12px] text-slate-500 truncate">
-                  {detailNarrative(s)}
-              </div>
-            </div>
-
-            <span className="text-slate-300" aria-hidden>
-              ›
-            </span>
-          </div>
-        </div>
-      </button>
-    );
-  }
-
-  // -----------------------------
   // Filters UI
   // -----------------------------
   function resetFilters() {
     setSearchText("");
     setPlatoonFilter("");
-    setSortMode(section === "upcoming" ? "date_asc" : "date_desc");
+    setSortMode(defaultSort);
   }
 
-  function FiltersBar() {
-    const showSort = !(section === "history" && historySubtab === "settled");
-    const defaultSort = section === "upcoming" ? "date_asc" : "date_desc";
+  function renderFiltersBar() {
+    if (section === "calendar" || section === "settings") return null;
 
     return (
-      <div className="mb-3">
-        <div className="flex items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((v) => !v)}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-          >
-            {filtersOpen ? "Hide filters" : "Filters"}
-            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
-          </button>
-        </div>
-
-        {filtersOpen && (
-          <div className="mt-2 space-y-2">
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
-              <input
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                placeholder="Search name or platoon…"
-                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
-              />
-
-              <select
-                value={platoonFilter}
-                onChange={(e) => setPlatoonFilter(e.target.value)}
-                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
-              >
-                <option value="">All platoons</option>
-                {platoonOptions.map((p) => (
-                  <option key={p} value={p}>
-                    {p ? (String(p).toUpperCase().includes("PLATOON") ? p : `${p} Platoon`) : "-"}
-                  </option>
-                ))}
-              </select>
-
-              {showSort ? (
-                <select
-                  value={sortMode}
-                  onChange={(e) => setSortMode(e.target.value)}
-                  className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
-                >
-                  <option value={defaultSort}>
-                    {defaultSort === "date_asc" ? "Date (oldest)" : "Date (newest)"}
-                  </option>
-                  <option value="date_desc">Date (newest)</option>
-                  <option value="date_asc">Date (oldest)</option>
-                  <option value="name_az">Name (A–Z)</option>
-                  <option value="name_za">Name (Z–A)</option>
-                  <option value="platoon_az">Platoon (A–Z)</option>
-                  <option value="platoon_za">Platoon (Z–A)</option>
-                </select>
-              ) : (
-                <div />
-              )}
-
-              <div />
-            </div>
-
-            <div>
-              <button
-                type="button"
-                onClick={resetFilters}
-                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-              >
-                Reset filters
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      <FiltersBar
+        filtersOpen={filtersOpen}
+        setFiltersOpen={setFiltersOpen}
+        activeFilterCount={activeFilterCount}
+        searchText={searchText}
+        setSearchText={setSearchText}
+        platoonFilter={platoonFilter}
+        setPlatoonFilter={setPlatoonFilter}
+        platoonOptions={platoonOptions}
+        showSort={showSort}
+        sortMode={sortMode}
+        setSortMode={setSortMode}
+        defaultSort={defaultSort}
+        resetFilters={resetFilters}
+      />
     );
   }
 
-  // -----------------------------
-  // Settle flow UI (detail modal)
-  // -----------------------------
-  function renderSettleFlow() {
-    if (!selectedStandby || !settleFlowOpen) return null;
-    if (selectedStandby.deleted_at) return null;
-    if (selectedStandby.settled) return null;
+const renderSettleFlow = () => {
+  if (!selectedStandby || !settleFlowOpen) return null;
+  if (selectedStandby.deleted_at) return null;
+  if (selectedStandby.settled) return null;
 
-    const mismatchWarning = (() => {
-      if (!settleWithExistingId) return null;
-      const other = oppositeCandidates.find((x) => x.id === settleWithExistingId);
-      if (!other) return null;
+  // your existing settle UI block goes here
+  // (paste the renderSettleFlow() body you already have)
+};
 
-      const { mismatch } = getNameMismatchInfo(selectedStandby.person_name, other.person_name);
-      if (!mismatch) return null;
 
-      return (
-        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          <div className="font-semibold">Names don’t match</div>
-          <div className="mt-1">
-            Could be a typo, or a <span className="font-semibold">three way standby</span>.
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setMismatchResolution("threeway")}
-              className={[
-                "rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
-                mismatchResolution === "threeway"
-                  ? "bg-slate-900 text-white border-slate-900"
-                  : "bg-white border-amber-200 text-amber-900",
-              ].join(" ")}
-            >
-              Three way standby
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setMismatchResolution("same")}
-              className={[
-                "rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
-                mismatchResolution === "same"
-                  ? "bg-slate-900 text-white border-slate-900"
-                  : "bg-white border-amber-200 text-amber-900",
-              ].join(" ")}
-            >
-              Same person (just a typo)
-            </button>
-          </div>
-
-          {mismatchResolution === "threeway" && (
-            <div className="mt-2 text-xs text-amber-800">Adds note to both shifts: “Three way standby”.</div>
-          )}
-        </div>
-      );
-    })();
-
-    return (
-      <div className="mt-4 border-t border-slate-200 pt-4">
-        <div className="text-sm font-semibold text-slate-800 mb-2">Settle this standby</div>
-
-        {settleChoice === null && (
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => setSettleChoice("new")}
-              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 active:scale-[0.99] transition"
-              type="button"
-            >
-              New shift
-            </button>
-            <button
-              onClick={() => setSettleChoice("existing")}
-              className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99] transition"
-              type="button"
-            >
-              Existing shift
-            </button>
-            <button
-              onClick={() => {
-                setSettleFlowOpen(false);
-                setSettleChoice(null);
-                setSettleWithExistingId(null);
-                setOppositeCandidates([]);
-                setMismatchResolution("");
-              }}
-              className="rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 active:scale-[0.99] transition"
-              type="button"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-
-        {settleChoice === "existing" && (
-          <div className="mt-3 space-y-3">
-            <div className="text-sm text-slate-600">Pick a shift from the opposite list:</div>
-
-            {loadingOpposite ? (
-              <p className="text-slate-500">Loading…</p>
-            ) : oppositeCandidates.length === 0 ? (
-              <p className="text-slate-500">No available shifts in the opposite list.</p>
-            ) : (
-              <div className="rounded-md border border-slate-200 overflow-hidden">
-                {oppositeCandidates.map((s, idx) => (
-                  <div
-                    key={s.id}
-                    className={["p-3 flex items-center justify-between gap-3", idx ? "border-t border-slate-200" : ""].join(
-                      " "
-                    )}
-                  >
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-900 truncate">{toTitleCase(s.person_name)}</div>
-                      <div className="text-xs text-slate-500 truncate">{formatPlatoonLabel(s.platoon)}</div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">
-                        {formatDisplayDate(s.shift_date)}
-                        {shiftTypeShort(s) ? ` • ${shiftTypeShort(s)}` : ""}
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        setSettleWithExistingId(s.id);
-                        setMismatchResolution("");
-                      }}
-                      className={[
-                        "shrink-0 rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
-                        settleWithExistingId === s.id
-                          ? "bg-slate-100 border-slate-300 text-slate-900"
-                          : "bg-white border-slate-200 text-slate-900 hover:bg-slate-50",
-                      ].join(" ")}
-                      type="button"
-                    >
-                      Select
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {mismatchWarning}
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  setSettleChoice(null);
-                  setSettleWithExistingId(null);
-                  setOppositeCandidates([]);
-                  setMismatchResolution("");
-                }}
-                className="rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 active:scale-[0.99] transition"
-                type="button"
-              >
-                Back
-              </button>
-
-              {settleWithExistingId && (
-                <button
-                  onClick={() => settleSelectedWithExisting(settleWithExistingId)}
-                  className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 active:scale-[0.99] transition"
-                  type="button"
-                >
-                  Settle now
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {settleChoice === "new" && (
-          <NewShiftMiniForm
-            selectedStandby={selectedStandby}
-            userId={user?.id}
-            onBack={() => setSettleChoice(null)}
-            onCreate={(payload, threeWay) => createShiftAndSettleWithSelected(payload, threeWay)}
-          />
-        )}
-      </div>
-    );
-  }
-
-  // -----------------------------
-  // Render list
-  // -----------------------------
   function renderList() {
     if (loading) return <p className="text-slate-500">Loading…</p>;
 
-    // History settled grouped
     if (section === "history" && historySubtab === "settled") {
       const groups = historyGroups;
       const count = standbys.length;
@@ -1711,6 +1247,8 @@ function nameWithPlatoon(s) {
               </div>
             </div>
           </div>
+
+          {renderFiltersBar()}
 
           {groups.length === 0 ? (
             <EmptyState tabLabel={emptyText()} />
@@ -1734,7 +1272,20 @@ function nameWithPlatoon(s) {
 
                   <div className="divide-y divide-slate-200">
                     {g.rows.map((s) => (
-                      <ListRowCompact key={s.id} s={s} />
+                      <ListRowCompact
+                        key={s.id}
+                        s={s}
+                        rowSentence={rowSentence}
+                        onToggleSelect={(row) =>
+                          openStandbyDetailById({
+                            id: row?.id,
+                            resetOverlays,
+                            setDrawerOpen,
+                            setSelectedStandby,
+                          })
+                        }
+
+                      />
                     ))}
                   </div>
                 </div>
@@ -1757,15 +1308,19 @@ function nameWithPlatoon(s) {
           </div>
         </div>
 
-        {section !== "history" && <FiltersBar />}
-        {section === "history" && historySubtab === "deleted" && <FiltersBar />}
+        {renderFiltersBar()}
 
         {rows.length === 0 ? (
           <EmptyState tabLabel={emptyText()} />
         ) : (
           <div className="rounded-md border border-slate-200 bg-white overflow-hidden divide-y divide-slate-200">
             {rows.map((s) => (
-              <ListRowCompact key={s.id} s={s} />
+              <ListRowCompact
+                key={s.id}
+                s={s}
+                rowSentence={rowSentence}
+                onToggleSelect={(row) => openDetail(row)}
+              />
             ))}
           </div>
         )}
@@ -1773,9 +1328,6 @@ function nameWithPlatoon(s) {
     );
   }
 
-  // -----------------------------
-  // Settings
-  // -----------------------------
   function renderSettings() {
     const email = session?.user?.email || user?.email || "—";
 
@@ -1805,7 +1357,6 @@ function nameWithPlatoon(s) {
         </div>
 
         <div className="space-y-3">
-          {/* Account */}
           <div className="rounded-md border border-slate-200 bg-white p-4">
             <div className="text-sm font-extrabold text-slate-900">Account</div>
 
@@ -1840,10 +1391,17 @@ function nameWithPlatoon(s) {
               >
                 Change password
               </button>
+
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+              >
+                Sign out
+              </button>
             </div>
           </div>
 
-          {/* About */}
           <div className="rounded-md border border-slate-200 bg-white p-4">
             <div className="text-sm font-extrabold text-slate-900">About</div>
 
@@ -1896,9 +1454,7 @@ function nameWithPlatoon(s) {
     );
   }
 
-  // -----------------------------
   // Logged out
-  // -----------------------------
   if (!user?.id) {
     return (
       <div className="mx-auto max-w-xl px-4 py-10">
@@ -1910,12 +1466,29 @@ function nameWithPlatoon(s) {
     );
   }
 
-  // -----------------------------
-  // Main render
-  // -----------------------------
+  const drawerEmail = session?.user?.email || user?.email || "";
+
   return (
     <div className="min-h-screen bg-white overflow-x-hidden">
-      <Drawer />
+      <Drawer
+        drawerOpen={drawerOpen}
+        setDrawerOpen={setDrawerOpen}
+        drawerGroup={drawerGroup}
+        setDrawerGroup={setDrawerGroup}
+        section={section}
+        goStandbys={goStandbys}
+        goUpcoming={goUpcoming}
+        goHistory={goHistory}
+        goCalendar={goCalendar}
+        goSettings={goSettings}
+        email={drawerEmail}
+        overallPlus={overallPlus}
+        overallMinus={overallMinus}
+        userEmail={session?.user?.email || user?.email || ""}
+        onAddStandby={() => openAddStandbyModal()}
+        onGoOwed={() => goStandbys("owed")}
+        onGoOwe={() => goStandbys("owe")}
+      />
 
       {/* Top bar */}
       <div className="sticky top-0 z-20 bg-white border-b border-slate-100">
@@ -1955,15 +1528,16 @@ function nameWithPlatoon(s) {
             userId={user?.id}
             mode={calendarSubtab === "mine" ? "mine" : "shift"}
             homePlatoon={homePlatoon}
-            onSelectStandby={(row) => {
-              resetOverlays();
-              setDrawerOpen(false);
-              setSelectedStandby(row);
-            }}
+            onGoSettings={() => goSettings()}
+            onSelectStandby={(row) =>
+              openStandbyDetailById({
+                id: row?.id,
+                resetOverlays,
+                setDrawerOpen,
+                setSelectedStandby,
+              })
+            }
           />
-
-
-
         ) : (
           renderList()
         )}
@@ -2008,6 +1582,12 @@ function nameWithPlatoon(s) {
               </select>
             </div>
 
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="text-xs font-semibold text-slate-600">
+                {shiftSummaryForDuty(form.shift_type, form.duty_platoon, form.shift_date)}
+              </div>
+            </div>
+
             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
               <div className="text-sm font-semibold text-slate-900 mb-2">
                 {isFuture(form.shift_date) ? "Who will work this shift?" : "Who worked this shift?"}
@@ -2021,7 +1601,9 @@ function nameWithPlatoon(s) {
                     onChange={() => setForm((f) => ({ ...f, worked_for_me: false, settle_with_existing_id: null }))}
                     className="mt-1"
                   />
-                  <div className="font-semibold">{isFuture(form.shift_date) ? "I will work for them" : "I worked for them"}</div>
+                  <div className="font-semibold">
+                    {isFuture(form.shift_date) ? "I will work for them" : "I worked for them"}
+                  </div>
                 </label>
 
                 <label className="flex items-start gap-3 text-sm text-slate-800">
@@ -2032,7 +1614,9 @@ function nameWithPlatoon(s) {
                     onChange={() => setForm((f) => ({ ...f, worked_for_me: true, settle_with_existing_id: null }))}
                     className="mt-1"
                   />
-                  <div className="font-semibold">{isFuture(form.shift_date) ? "They will work for me" : "They worked for me"}</div>
+                  <div className="font-semibold">
+                    {isFuture(form.shift_date) ? "They will work for me" : "They worked for me"}
+                  </div>
                 </label>
               </div>
             </div>
@@ -2060,12 +1644,6 @@ function nameWithPlatoon(s) {
               value={form.platoon}
               onChange={(v) => setForm((f) => ({ ...f, platoon: v }))}
             />
-
-            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="text-xs font-semibold text-slate-600">
-                {shiftSummaryForDuty(form.shift_type, form.duty_platoon, form.shift_date)}
-              </div>
-            </div>
 
             <TextAreaField
               label="Notes (optional)"
@@ -2129,7 +1707,9 @@ function nameWithPlatoon(s) {
           {!isEditing ? (
             <div className="space-y-4">
               <div className="rounded-md border border-slate-200 bg-white p-4">
-                <div className="mt-2 text-sm text-slate-700 leading-relaxed">{detailNarrative(selectedStandby)}</div>
+                <div className="mt-2 text-sm text-slate-700 leading-relaxed">
+                  {detailNarrative(selectedStandby, findPartnerShift)}
+                </div>
                 <div className="mt-3 flex items-center justify-between">
                   <div className="text-xs font-semibold text-slate-500">Status</div>
                   <StatusPill text={statusText(selectedStandby)} />
@@ -2203,7 +1783,9 @@ function nameWithPlatoon(s) {
                       onChange={() => setEditForm((f) => ({ ...f, worked_for_me: false }))}
                       className="mt-1"
                     />
-                    <div className="font-semibold">{isFuture(editForm.shift_date) ? "I will work for them" : "I worked for them"}</div>
+                    <div className="font-semibold">
+                      {isFuture(editForm.shift_date) ? "I will work for them" : "I worked for them"}
+                    </div>
                   </label>
                   <label className="flex items-start gap-3 text-sm text-slate-800">
                     <input
@@ -2213,7 +1795,9 @@ function nameWithPlatoon(s) {
                       onChange={() => setEditForm((f) => ({ ...f, worked_for_me: true }))}
                       className="mt-1"
                     />
-                    <div className="font-semibold">{isFuture(editForm.shift_date) ? "They will work for me" : "They worked for me"}</div>
+                    <div className="font-semibold">
+                      {isFuture(editForm.shift_date) ? "They will work for me" : "They worked for me"}
+                    </div>
                   </label>
                 </div>
               </div>
@@ -2282,7 +1866,6 @@ function nameWithPlatoon(s) {
                     setEditForm({
                       person_name: selectedStandby.person_name || "",
                       platoon: selectedStandby.platoon || "",
-                      duty_platoon: selectedStandby.duty_platoon || "",
                       shift_date: selectedStandby.shift_date || "",
                       shift_type: selectedStandby.shift_type || "Day",
                       notes: selectedStandby.notes || "",
@@ -2306,7 +1889,6 @@ function nameWithPlatoon(s) {
 }
 
 /* ---------- Helper Components ---------- */
-
 function EmptyState({ tabLabel }) {
   return (
     <div className="rounded-md border border-slate-200 bg-white p-6 text-center">
@@ -2428,7 +2010,11 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
       <div className="text-sm font-semibold text-slate-800 mb-2">New shift to settle with</div>
 
       <div className="space-y-4">
-        <InputField label="Name" value={mini.person_name} onChange={(v) => setMini((m) => ({ ...m, person_name: toTitleCase(v) }))} />
+        <InputField
+          label="Name"
+          value={mini.person_name}
+          onChange={(v) => setMini((m) => ({ ...m, person_name: toTitleCase(v) }))}
+        />
         <InputField
           label="What platoon is this person on?"
           value={mini.platoon}
