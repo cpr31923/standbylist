@@ -96,7 +96,7 @@ export default function Login() {
 
         if (!firstName.trim()) throw new Error("Please enter your first name.");
         if (!lastName.trim()) throw new Error("Please enter your last name.");
-        if (!password) throw new Error("Please create a password (min 6 characters).");
+        if (!password) throw new Error("Please create a password (must have uppercase, lowercase and numbers. Min. 8 characters).");
         if (password.length < 6) throw new Error("Password must be at least 6 characters.");
 
         const { data, error } = await supabase.auth.signUp({
@@ -221,7 +221,7 @@ export default function Login() {
             <>
               {signupStep === "email" ? (
                 <div style={styles.helpBlock}>
-                  Start with your email. Next you’ll set a password and add your name.
+                  Enter your email to begin.
                 </div>
               ) : (
                 <>

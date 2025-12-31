@@ -1,6 +1,7 @@
 // src/components/StandbyList.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient";
+import CalendarView from "./CalendarView";
 
 /**
  * standby_events columns assumed:
@@ -81,7 +82,6 @@ function toTitleCaseLive(input) {
   return endsWithSpace ? `${titled} ` : titled;
 }
 
-
 function makeUUID() {
   if (crypto?.randomUUID) return crypto.randomUUID();
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -96,6 +96,12 @@ function shiftTypeShort(row) {
   return t ? t : "";
 }
 
+function firstName(full) {
+  const s = String(full || "").trim();
+  if (!s) return "—";
+  return s.split(/\s+/)[0];
+}
+
 function StatusPill({ text }) {
   const base =
     "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap";
@@ -107,59 +113,87 @@ function StatusPill({ text }) {
     : "bg-slate-100 text-slate-700";
   return <span className={`${base} ${cls}`}>{text}</span>;
 }
-
-function firstName(full) {
-  const s = String(full || "").trim();
-  if (!s) return "—";
-  return s.split(/\s+/)[0];
+function nameWithPlatoon(s) {
+  const nameFull = toTitleCase(s?.person_name || "—");
+  const p = formatPlatoonLabel(s?.platoon);
+  return `${nameFull} (${p})`;
 }
 
 function rowSentence(s) {
-  // For deleted standbys: show date + shift type only (no narrative)
+  // Deleted standbys: show date + shift type only (no narrative)
   if (s?.deleted_at) {
     const date = formatDisplayDate(s?.shift_date);
     const st = shiftTypeShort(s);
     return `${date}${st ? ` ${st}` : ""}`;
   }
 
-  const name = firstName(s?.person_name);
+  const who = nameWithPlatoon(s);
+  const first = firstName(s?.person_name);
   const date = formatDisplayDate(s?.shift_date);
-  const platoon = formatPlatoonLabel(s?.duty_platoon || s?.platoon);
+  const dutyPlatoon = formatPlatoonLabel(s?.duty_platoon || s?.platoon);
   const st = shiftTypeShort(s);
   const stPart = st ? ` ${st}` : "";
   const future = isFuture(s?.shift_date);
+
+  // If settled and paired, show the "Once/After..." style summary (same as detail modal intent)
+  if (s?.settled && s?.settlement_group_id) {
+    const other = findPartnerShift(s);
+    if (other) {
+      const myDate = String(s.shift_date || "");
+      const otherDate = String(other.shift_date || "");
+      const isSettlingShift =
+        myDate > otherDate || (myDate === otherDate && String(s.id) > String(other.id));
+
+      if (isSettlingShift) {
+        const alreadyHappened = !isFuture(s.shift_date);
+
+        if (s.worked_for_me) {
+          // they work for you (you owed them) — settling shift is them working for you
+          return alreadyHappened
+            ? `After ${first} worked for you on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
+            : `Once ${first} works for you on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
+        }
+
+        // you work for them
+        return alreadyHappened
+          ? `After you worked for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
+          : `Once you work for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
+      }
+      // obligation shift: keep plain wording
+    }
+  }
 
   // worked_for_me === true  => they worked for you (so you owe them)
   // worked_for_me === false => you worked for them (so they owe you)
   if (s?.worked_for_me) {
     return future
-      ? `${name} will work for you on ${date} - ${platoon}${stPart}.`
-      : `${name} worked for you on ${date} - ${platoon}${stPart}.`;
+      ? `${who} will work for you on ${date} - ${dutyPlatoon}${stPart}. You will owe them a shift.`
+      : `${who} worked for you on ${date} - ${dutyPlatoon}${stPart}. You owe them a shift.`;
   }
 
   return future
-    ? `You will work for ${name} on ${date} - ${platoon}${stPart}.`
-    : `You worked for ${name} on ${date} - ${platoon}${stPart}.`;
+    ? `You will work for ${who} on ${date} - ${dutyPlatoon}${stPart}. They will owe you a shift.`
+    : `You worked for ${who} on ${date} - ${dutyPlatoon}${stPart}. They owe you a shift.`;
 }
-
-
 
 export default function StandbyList() {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
 
-  const [overallPlus, setOverallPlus] = useState(0);  // owed to me (worked_for_me = false)
-  const [overallMinus, setOverallMinus] = useState(0); // I owe (worked_for_me = true)
+  // overall summary (unsettled, not deleted)
+  const [overallPlus, setOverallPlus] = useState(0); // they owe me (worked_for_me=false)
+  const [overallMinus, setOverallMinus] = useState(0); // I owe (worked_for_me=true)
 
+  // Calendar sub-tabs + home platoon
+  const [calendarSubtab, setCalendarSubtab] = useState("shift"); // shift | mine
+  const [homePlatoon, setHomePlatoon] = useState("");
 
   // Drawer / navigation
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  // Collapsible groups in drawer
-  const [drawerGroup, setDrawerGroup] = useState(""); // "" | standbys | upcoming | history
+  const [drawerGroup, setDrawerGroup] = useState(""); // "" | standbys | upcoming | history | calendar
 
   // Top-level section
-  const [section, setSection] = useState("standbys"); // standbys | upcoming | history | settings
+  const [section, setSection] = useState("standbys"); // standbys | upcoming | history | settings | calendar
 
   // Sub-tabs
   const [standbysSubtab, setStandbysSubtab] = useState("owed"); // owed | owe
@@ -225,6 +259,28 @@ export default function StandbyList() {
   const [refreshTick, setRefreshTick] = useState(0);
 
   // -----------------------------
+  // Load & persist Home Platoon (localStorage)
+  // -----------------------------
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("shift-iou-home-platoon") || "";
+      if (saved) setHomePlatoon(saved);
+    } catch (e) {
+      // ignore
+    }
+  }, []);
+
+  function saveHomePlatoon(next) {
+    const v = String(next || "").trim().toUpperCase();
+    setHomePlatoon(v);
+    try {
+      localStorage.setItem("shift-iou-home-platoon", v);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // -----------------------------
   // AUTH
   // -----------------------------
   useEffect(() => {
@@ -284,8 +340,9 @@ export default function StandbyList() {
     setUser(null);
     window.location.reload();
   }
+
   // -----------------------------
-  // Prevent horizontal scroll (app should always fit device width)
+  // Prevent horizontal scroll
   // -----------------------------
   useEffect(() => {
     const prevHtml = document.documentElement.style.overflowX;
@@ -305,9 +362,8 @@ export default function StandbyList() {
     if (drawerOpen) setDrawerGroup("");
   }, [drawerOpen]);
 
-
   // -----------------------------
-  // Scroll lock when modal open
+  // Scroll lock when modal/drawer open
   // -----------------------------
   useEffect(() => {
     const anyModalOpen = showAddModal || Boolean(selectedStandby) || drawerOpen;
@@ -377,6 +433,50 @@ export default function StandbyList() {
     setDrawerOpen(false);
   }
 
+  function goCalendar(which) {
+    resetOverlays();
+    setSection("calendar");
+    setDrawerGroup("calendar");
+    setCalendarSubtab(which); // "shift" | "mine"
+    setFiltersOpen(false);
+    setDrawerOpen(false);
+  }
+
+  // -----------------------------
+  // Labels
+  // -----------------------------
+  function sectionTitle() {
+    if (section === "standbys") return "Standbys";
+    if (section === "upcoming") return "Upcoming";
+    if (section === "history") return "History";
+    if (section === "calendar") return "Calendar";
+    if (section === "settings") return "Settings";
+    return "Shift IOU";
+  }
+
+  function listTitle() {
+    if (section === "standbys") return standbysSubtab === "owed" ? "Standbys - Owed to me" : "Standbys - I owe";
+    if (section === "upcoming") return upcomingSubtab === "i_work" ? "Upcoming Standbys I've Agreed To" : "Upcoming Standbys I've Requested";
+    return historySubtab === "settled" ? "Settled" : "Deleted";
+  }
+
+  function totalLabel() {
+    if (section === "standbys" && standbysSubtab === "owed") return "Total standbys owed to me:";
+    if (section === "standbys" && standbysSubtab === "owe") return "Total standbys I owe:";
+    if (section === "upcoming" && upcomingSubtab === "they_work") return "Total upcoming shifts off:";
+    if (section === "upcoming" && upcomingSubtab === "i_work") return "Total upcoming shifts I’ve agreed to:";
+    if (section === "history" && historySubtab === "settled") return "Total settled:";
+    return "Total deleted:";
+  }
+
+  function emptyText() {
+    if (section === "standbys" && standbysSubtab === "owed") return "No one owes you a shift currently.";
+    if (section === "standbys" && standbysSubtab === "owe") return "You don't owe anyone a shift currently.";
+    if (section === "upcoming" && upcomingSubtab === "i_work") return "No upcoming shift commitments 🎉";
+    if (section === "upcoming" && upcomingSubtab === "they_work") return "No upcoming shifts off ☹️";
+    if (section === "history" && historySubtab === "settled") return "Settled shifts will appear here.";
+    return "Deleted shifts will appear here.";
+  }
 
   function statusText(s) {
     if (s.deleted_at) return "Deleted";
@@ -391,14 +491,32 @@ export default function StandbyList() {
     return `This shift ${tense} a: ${sp} ${st.toLowerCase()} shift`;
   }
 
-    function detailNarrative(s) {
-    const nameFull = s?.person_name || "—";
-    const name = firstName(nameFull);
-    const platoon = formatPlatoonLabel(s?.platoon);
-    const date = formatDisplayDate(s?.shift_date);
-    const st = shiftTypeShort(s);
-    const stPart = st ? ` ${st}` : "";
-    const future = isFuture(s?.shift_date);
+  // -----------------------------
+  // Detail narrative
+  // -----------------------------
+  function findPartnerShift(s) {
+    if (!s?.settlement_group_id) return null;
+    const gid = s.settlement_group_id;
+    const groupRows = standbys.filter((r) => r.settlement_group_id === gid && r.id !== s.id);
+    return groupRows.length ? groupRows[0] : null;
+  }
+
+function nameWithPlatoon(s) {
+  const full = toTitleCase(s?.person_name || "");
+  const p = formatPlatoonLabel(s?.platoon);
+  return `${full} (${p})`;
+}
+
+
+  function detailNarrative(s) {
+      const nameFull = toTitleCase(s?.person_name || "—");
+      const name = firstName(nameFull);
+      const platoon = formatPlatoonLabel(s?.platoon);
+      const date = formatDisplayDate(s?.shift_date);
+      const st = shiftTypeShort(s);
+      const stPart = st ? ` ${st}` : "";
+      const future = isFuture(s?.shift_date);
+
 
     // Deleted: keep it simple
     if (s?.deleted_at) {
@@ -412,21 +530,17 @@ export default function StandbyList() {
       if (other) {
         const myDate = String(s.shift_date || "");
         const otherDate = String(other.shift_date || "");
-        // The later-dated shift is considered the "settling" shift.
-        // If equal, fall back to id comparison (stable enough).
         const isSettlingShift =
           myDate > otherDate || (myDate === otherDate && String(s.id) > String(other.id));
 
         if (!isSettlingShift) {
-          // The obligation shift (no "you owe them / they owe you" line)
           if (s.worked_for_me) {
-            return `${nameFull} (${platoon}) worked for you on ${date}${stPart}.`;
+            return `const who = nameWithPlatoon(s); worked for you on ${date}${stPart}.`;
           }
-          return `You worked for ${nameFull} (${platoon}) on ${date}${stPart}.`;
+          return `You worked for const who = nameWithPlatoon(s); on ${date}${stPart}.`;
         }
 
-        // The settling shift ("once..." wording, tense-aware)
-        const settledAlready = !isFuture(s.shift_date); // if this settling shift date is in the past, use past tense
+        const settledAlready = !isFuture(s.shift_date);
         if (s.worked_for_me) {
           return settledAlready
             ? `After ${name} worked for you on ${date}${stPart}, your shifts are settled.`
@@ -441,22 +555,13 @@ export default function StandbyList() {
 
     // Unsettled (or settled single without partner) keeps the owe/owed wording
     if (s?.worked_for_me) {
-      if (future) return `${nameFull} (${platoon}) will work for you on ${date}${stPart}. You will owe them a shift.`;
-      return `${nameFull} (${platoon}) worked for you on ${date}${stPart}. You owe them a shift.`;
+      if (future) return `const who = nameWithPlatoon(s); will work for you on ${date}${stPart}. You will owe them a shift.`;
+      return `const who = nameWithPlatoon(s); worked for you on ${date}${stPart}. You owe them a shift.`;
     }
 
-    if (future) return `You will work for ${nameFull} (${platoon}) on ${date}${stPart}. They will owe you a shift.`;
-    return `You worked for ${nameFull} (${platoon}) on ${date}${stPart}. They owe you a shift.`;
+    if (future) return `You will work for const who = nameWithPlatoon(s); on ${date}${stPart}. They will owe you a shift.`;
+    return `You worked for const who = nameWithPlatoon(s); on ${date}${stPart}. They owe you a shift.`;
   }
-
-
-  function findPartnerShift(s) {
-    if (!s?.settlement_group_id) return null;
-    const gid = s.settlement_group_id;
-    const groupRows = standbys.filter((r) => r.settlement_group_id === gid && r.id !== s.id);
-    return groupRows.length ? groupRows[0] : null;
-  }
-
 
   // -----------------------------
   // Keep edit form in sync
@@ -548,7 +653,7 @@ export default function StandbyList() {
   }, [section, standbysSubtab, upcomingSubtab, historySubtab, user?.id, refreshTick]);
 
   // -----------------------------
-  // Overall standby position (counts across all unsettled, not deleted)
+  // Overall standby position
   // -----------------------------
   useEffect(() => {
     if (!user?.id) {
@@ -583,7 +688,6 @@ export default function StandbyList() {
       setOverallMinus(minus);
     })();
   }, [user?.id, refreshTick]);
-
 
   // -----------------------------
   // Platoon auto-fill from roster function
@@ -1052,7 +1156,7 @@ export default function StandbyList() {
   }, [standbys]);
 
   // -----------------------------
-  // Filter/sort view rows (non-history-grouped)
+  // Filter/sort view rows
   // -----------------------------
   const viewRows = useMemo(() => {
     const q = normalizeName(searchText);
@@ -1138,39 +1242,6 @@ export default function StandbyList() {
   }, [standbys, section, historySubtab]);
 
   // -----------------------------
-  // Labels
-  // -----------------------------
-  function sectionTitle() {
-    if (section === "standbys") return "Standbys";
-    if (section === "upcoming") return "Upcoming";
-    return "History";
-  }
-
-  function listTitle() {
-    if (section === "standbys") return standbysSubtab === "owed" ? "Standbys - Owed to me" : "Standbys - I owe";
-    if (section === "upcoming") return upcomingSubtab === "i_work" ? "Upcoming Standbys I've Agreed To" : "Upcoming Standbys I've Requested";
-    return historySubtab === "settled" ? "Settled" : "Deleted";
-  }
-
-   function totalLabel() {
-    if (section === "standbys" && standbysSubtab === "owed") return "Total standbys owed to me:";
-    if (section === "standbys" && standbysSubtab === "owe") return "Total standbys I owe:";
-    if (section === "upcoming" && upcomingSubtab === "they_work") return "Total upcoming shifts off:";
-    if (section === "upcoming" && upcomingSubtab === "i_work") return "Total upcoming shifts I’ve agreed to:";
-    if (section === "history" && historySubtab === "settled") return "Total settled:";
-    return "Total deleted:";
-  }
-
-  function emptyText() {
-    if (section === "standbys" && standbysSubtab === "owed") return "No one owes you a shift currently.";
-    if (section === "standbys" && standbysSubtab === "owe") return "You don't owe anyone a shift currently.";
-    if (section === "upcoming" && upcomingSubtab === "i_work") return "No upcoming shift commitments 🎉";
-    if (section === "upcoming" && upcomingSubtab === "they_work") return "No upcoming shifts off ☹️";
-    if (section === "history" && historySubtab === "settled") return "Settled shifts will appear here.";
-    return "Deleted shifts will appear here.";
-  }
-
-  // -----------------------------
   // Drawer (collapsible submenu)
   // -----------------------------
   function Drawer() {
@@ -1210,17 +1281,14 @@ export default function StandbyList() {
 
     return (
       <div className="fixed inset-0 z-50">
-        <div
-          className="absolute inset-0 bg-black/25"
-          onMouseDown={() => setDrawerOpen(false)}
-        />
+        <div className="absolute inset-0 bg-black/25" onMouseDown={() => setDrawerOpen(false)} />
         <div className="absolute inset-y-0 left-0 w-[80%] max-w-[330px] bg-white text-slate-900 shadow-xl border-r border-slate-200 flex flex-col">
           <div className="px-4 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-lg font-extrabold text-slate-900 leading-tight">Shift IOU</div>
               <div className="text-[12px] text-slate-500 truncate mt-0.5">{emailLabel}</div>
 
-               <div className="mt-2">
+              <div className="mt-2">
                 <div className="text-[11px] font-semibold text-slate-500">Overall Standby Position:</div>
                 <div className="mt-0.5 text-base font-extrabold tracking-tight">
                   <span className={overallPlus > 0 ? "text-emerald-600" : "text-slate-700"}>owed {overallPlus}</span>
@@ -1277,6 +1345,19 @@ export default function StandbyList() {
               />
             </Group>
 
+            <Group id="calendar" title="Calendar">
+              <SubItem
+                label="Shift calendar"
+                active={section === "calendar" && calendarSubtab === "shift"}
+                onClick={() => goCalendar("shift")}
+              />
+              <SubItem
+                label="My calendar"
+                active={section === "calendar" && calendarSubtab === "mine"}
+                onClick={() => goCalendar("mine")}
+              />
+            </Group>
+
             <Group id="history" title="History">
               <SubItem
                 label="Settled"
@@ -1292,22 +1373,22 @@ export default function StandbyList() {
           </div>
 
           <div className="mt-auto px-4 py-4 border-t border-slate-100 space-y-2">
-                <button
-                  type="button"
-                  onClick={goSettings}
-                  className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-                >
-                  Settings
-                </button>
+            <button
+              type="button"
+              onClick={goSettings}
+              className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            >
+              Settings
+            </button>
 
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-                >
-                  Sign out
-                </button>
-              </div>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -1328,8 +1409,8 @@ export default function StandbyList() {
             <div className="min-w-0">
               <div className="text-[15px] font-semibold text-slate-900 truncate">{toTitleCase(s.person_name)}</div>
               <div className="text-[12px] text-slate-500 truncate">
-                {rowSentence(s)}
-                </div>
+                  {detailNarrative(s)}
+              </div>
             </div>
 
             <span className="text-slate-300" aria-hidden>
@@ -1357,16 +1438,15 @@ export default function StandbyList() {
     return (
       <div className="mb-3">
         <div className="flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => setFiltersOpen((v) => !v)}
-              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-            >
-              {filtersOpen ? "Hide filters" : "Filters"}
-              {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
-            </button>
-          </div>
-
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((v) => !v)}
+            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+          >
+            {filtersOpen ? "Hide filters" : "Filters"}
+            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+          </button>
+        </div>
 
         {filtersOpen && (
           <div className="mt-2 space-y-2">
@@ -1425,7 +1505,6 @@ export default function StandbyList() {
             </div>
           </div>
         )}
-
       </div>
     );
   }
@@ -1482,9 +1561,7 @@ export default function StandbyList() {
           </div>
 
           {mismatchResolution === "threeway" && (
-            <div className="mt-2 text-xs text-amber-800">
-              Adds note to both shifts: “Three way standby”.
-            </div>
+            <div className="mt-2 text-xs text-amber-800">Adds note to both shifts: “Three way standby”.</div>
           )}
         </div>
       );
@@ -1537,7 +1614,12 @@ export default function StandbyList() {
             ) : (
               <div className="rounded-md border border-slate-200 overflow-hidden">
                 {oppositeCandidates.map((s, idx) => (
-                  <div key={s.id} className={["p-3 flex items-center justify-between gap-3", idx ? "border-t border-slate-200" : ""].join(" ")}>
+                  <div
+                    key={s.id}
+                    className={["p-3 flex items-center justify-between gap-3", idx ? "border-t border-slate-200" : ""].join(
+                      " "
+                    )}
+                  >
                     <div className="min-w-0">
                       <div className="text-sm font-semibold text-slate-900 truncate">{toTitleCase(s.person_name)}</div>
                       <div className="text-xs text-slate-500 truncate">{formatPlatoonLabel(s.platoon)}</div>
@@ -1691,114 +1773,128 @@ export default function StandbyList() {
     );
   }
 
-   function renderSettings() {
-  const email = session?.user?.email || user?.email || "—";
+  // -----------------------------
+  // Settings
+  // -----------------------------
+  function renderSettings() {
+    const email = session?.user?.email || user?.email || "—";
 
-  async function sendPasswordReset() {
-    if (!email || email === "—") return alert("No email found.");
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-    if (error) {
-      console.error("Password reset error:", error);
-      alert("Could not send reset email. Check console.");
-      return;
+    async function sendPasswordReset() {
+      if (!email || email === "—") return alert("No email found.");
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      if (error) {
+        console.error("Password reset error:", error);
+        alert("Could not send reset email. Check console.");
+        return;
+      }
+      alert("Password reset email sent.");
     }
-    alert("Password reset email sent.");
-  }
 
-  function sendFeedbackEmail() {
-    const to = "cameron.reyniers@gmail.com"; // <-- change this
-    const subject = encodeURIComponent("Shift IOU feedback");
-    const body = encodeURIComponent(
-      `Hi,\n\nI have some feedback on Shift IOU:\n\n\n\n—\nUser: ${email}\n`
-    );
+    function sendFeedbackEmail() {
+      const to = "cameron.reyniers@gmail.com";
+      const subject = encodeURIComponent("Shift IOU feedback");
+      const body = encodeURIComponent(`Hi,\n\nI have some feedback on Shift IOU:\n\n\n\n—\nUser: ${email}\n`);
+      window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+    }
 
-    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
-  }
-
-  return (
-    <div>
-      <div className="mb-3">
-        <div className="text-lg font-extrabold text-slate-900">Settings</div>
-        <div className="text-sm text-slate-600 mt-1">Account + app info</div>
-      </div>
-
-      <div className="space-y-3">
-        {/* Account */}
-        <div className="rounded-md border border-slate-200 bg-white p-4">
-          <div className="text-sm font-extrabold text-slate-900">Account</div>
-
-          <div className="mt-2 text-sm text-slate-700">
-            <div className="text-xs font-semibold text-slate-500">Email</div>
-            <div className="mt-0.5 font-semibold">{email}</div>
-          </div>
-
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={sendPasswordReset}
-              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-            >
-              Change password
-            </button>
-          </div>
+    return (
+      <div>
+        <div className="mb-3">
+          <div className="text-lg font-extrabold text-slate-900">Settings</div>
+          <div className="text-sm text-slate-600 mt-1">Account + app info</div>
         </div>
 
-        {/* About */}
-        <div className="rounded-md border border-slate-200 bg-white p-4">
-          <div className="text-sm font-extrabold text-slate-900">About</div>
+        <div className="space-y-3">
+          {/* Account */}
+          <div className="rounded-md border border-slate-200 bg-white p-4">
+            <div className="text-sm font-extrabold text-slate-900">Account</div>
+
+            <div className="mt-2 text-sm text-slate-700">
+              <div className="text-xs font-semibold text-slate-500">Email</div>
+              <div className="mt-0.5 font-semibold">{email}</div>
+            </div>
+
+            <div className="mt-4 text-sm text-slate-700">
+              <div className="text-xs font-semibold text-slate-500">Home platoon</div>
+              <select
+                value={homePlatoon || ""}
+                onChange={(e) => saveHomePlatoon(e.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold"
+              >
+                <option value="">— Select —</option>
+                <option value="A">A Platoon</option>
+                <option value="B">B Platoon</option>
+                <option value="C">C Platoon</option>
+                <option value="D">D Platoon</option>
+              </select>
+              <div className="mt-1 text-xs text-slate-500">
+                Used for “My calendar” (shows Day/Night/off + overlays your standbys).
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={sendPasswordReset}
+                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+              >
+                Change password
+              </button>
+            </div>
+          </div>
+
+          {/* About */}
+          <div className="rounded-md border border-slate-200 bg-white p-4">
+            <div className="text-sm font-extrabold text-slate-900">About</div>
+
             <div className="mt-3">
               <button
-              type="button"
-              onClick={sendFeedbackEmail}
-              className="rounded-md bg-slate-900 text-white px-3 py-2 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition shadow-sm"
-            >
-              Send app feedback to Cam
-            </button>
-
+                type="button"
+                onClick={sendFeedbackEmail}
+                className="rounded-md bg-slate-900 text-white px-3 py-2 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition shadow-sm"
+              >
+                Send app feedback to Cam
+              </button>
             </div>
-          <div className="mt-2 text-sm text-slate-700 leading-relaxed space-y-3">
-          <p>
-            This app started as a personal side project. I built it because I was frustrated that there wasn’t an easy way
-            to track standby commitments — after trying spreadsheets, Notes apps, and old-fashioned pen and paper with limited success.
-          </p>
 
-          <p>
-            It’s designed as a simple, private tool to help individuals keep track of their own arrangements. It is not an
-            official system of record and should not be relied on as your only source of truth for anything important.
-          </p>
+            <div className="mt-3 text-sm text-slate-700 leading-relaxed space-y-3">
+              <p>
+                This app started as a personal side project. I built it because I was frustrated that there wasn’t an easy way
+                to track standby commitments, after trying spreadsheets, Notes apps, and old-fashioned pen and paper with limited
+                success.
+              </p>
 
-          <p>
-            This app is not affiliated with, endorsed by, or connected to DFES or any other organisation.
-          </p>
+              <p>
+                It’s designed as a simple, private tool to help individuals keep track of their own arrangements. It is not an
+                official system of record and should not be relied on as your only source of truth for anything important.
+              </p>
 
-          <p>
-            Your data is stored per-account and protected by access controls, but this is a personal beta project and no
-            guarantees are made about uptime, accuracy, or data retention. Please keep your own backup if the information
-            matters to you.
-          </p>
+              <p>This app is not affiliated with, endorsed by, or connected to DFES or any other organisation.</p>
 
-          <p>
-            By using this app you accept that it is provided “as-is”, and that no responsibility is taken for any
-            data loss, errors, or consequences arising from its use.
-          </p>
+              <p>
+                Your data is stored per-account and protected by access controls, but this is a personal beta project and no
+                guarantees are made about uptime, accuracy, or data retention. Please keep your own backup if the information
+                matters to you.
+              </p>
 
-          <div className="pt-2 border-t border-slate-100">
-            <div className="text-xs font-semibold text-slate-500">Privacy</div>
-            <div className="text-sm text-slate-700">
-              Your entries are private to your account and are not visible to other users. No data is sold, shared, or used
-              for any purpose other than providing the app’s functionality.
+              <p>
+                By using this app you accept that it is provided “as-is”, and that no responsibility is taken for any data loss,
+                errors, or consequences arising from its use.
+              </p>
+
+              <div className="pt-2 border-t border-slate-100">
+                <div className="text-xs font-semibold text-slate-500">Privacy</div>
+                <div className="text-sm text-slate-700">
+                  Your entries are private to your account and are not visible to other users. No data is sold, shared, or used
+                  for any purpose other than providing the app’s functionality.
+                </div>
+              </div>
             </div>
-  </div>
-</div>
-
-
-          
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
-
+    );
+  }
 
   // -----------------------------
   // Logged out
@@ -1833,9 +1929,7 @@ export default function StandbyList() {
             ☰
           </button>
 
-          <div className="text-2xl font-bold text-slate-900 tracking-tight truncate">
-            {sectionTitle()}
-            </div>
+          <div className="text-2xl font-bold text-slate-900 tracking-tight truncate">{sectionTitle()}</div>
 
           <button
             type="button"
@@ -1854,8 +1948,25 @@ export default function StandbyList() {
           </div>
         )}
 
-        {section === "settings" ? renderSettings() : renderList()}
+        {section === "settings" ? (
+          renderSettings()
+        ) : section === "calendar" ? (
+          <CalendarView
+            userId={user?.id}
+            mode={calendarSubtab === "mine" ? "mine" : "shift"}
+            homePlatoon={homePlatoon}
+            onSelectStandby={(row) => {
+              resetOverlays();
+              setDrawerOpen(false);
+              setSelectedStandby(row);
+            }}
+          />
 
+
+
+        ) : (
+          renderList()
+        )}
       </div>
 
       {/* Add Modal */}
@@ -1910,9 +2021,7 @@ export default function StandbyList() {
                     onChange={() => setForm((f) => ({ ...f, worked_for_me: false, settle_with_existing_id: null }))}
                     className="mt-1"
                   />
-                  <div className="font-semibold">
-                    {isFuture(form.shift_date) ? "I will work for them" : "I worked for them"}
-                  </div>
+                  <div className="font-semibold">{isFuture(form.shift_date) ? "I will work for them" : "I worked for them"}</div>
                 </label>
 
                 <label className="flex items-start gap-3 text-sm text-slate-800">
@@ -1923,9 +2032,7 @@ export default function StandbyList() {
                     onChange={() => setForm((f) => ({ ...f, worked_for_me: true, settle_with_existing_id: null }))}
                     className="mt-1"
                   />
-                  <div className="font-semibold">
-                    {isFuture(form.shift_date) ? "They will work for me" : "They worked for me"}
-                  </div>
+                  <div className="font-semibold">{isFuture(form.shift_date) ? "They will work for me" : "They worked for me"}</div>
                 </label>
               </div>
             </div>
@@ -1970,7 +2077,9 @@ export default function StandbyList() {
               <input
                 type="checkbox"
                 checked={form.settle_existing}
-                onChange={(e) => setForm((f) => ({ ...f, settle_existing: e.target.checked, settle_with_existing_id: null }))}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, settle_existing: e.target.checked, settle_with_existing_id: null }))
+                }
                 className="mt-1"
               />
               <div className="font-semibold">Use this to settle an existing standby</div>
@@ -2016,10 +2125,7 @@ export default function StandbyList() {
 
       {/* Detail Modal */}
       {selectedStandby && (
-        <ModalShell
-            title={toTitleCase(selectedStandby.person_name)}
-            onClose={resetOverlays}
-        >
+        <ModalShell title={toTitleCase(selectedStandby.person_name)} onClose={resetOverlays}>
           {!isEditing ? (
             <div className="space-y-4">
               <div className="rounded-md border border-slate-200 bg-white p-4">
@@ -2028,7 +2134,6 @@ export default function StandbyList() {
                   <div className="text-xs font-semibold text-slate-500">Status</div>
                   <StatusPill text={statusText(selectedStandby)} />
                 </div>
-
               </div>
 
               {selectedStandby.notes && (
@@ -2056,6 +2161,7 @@ export default function StandbyList() {
                 value={editForm.platoon}
                 onChange={(v) => setEditForm((f) => ({ ...f, platoon: v }))}
               />
+
               <div>
                 <label className="text-sm font-semibold text-slate-700">Shift date</label>
                 <input
@@ -2065,6 +2171,7 @@ export default function StandbyList() {
                   className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
                 />
               </div>
+
               <div>
                 <label className="text-sm font-semibold text-slate-700">Shift type</label>
                 <select
@@ -2076,11 +2183,13 @@ export default function StandbyList() {
                   <option value="Night">Night</option>
                 </select>
               </div>
+
               <TextAreaField
                 label="Notes (optional)"
                 value={editForm.notes}
                 onChange={(v) => setEditForm((f) => ({ ...f, notes: v }))}
               />
+
               <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                 <div className="text-sm font-semibold text-slate-900 mb-2">
                   {isFuture(editForm.shift_date) ? "Who will work this shift?" : "Who worked this shift?"}
@@ -2157,7 +2266,6 @@ export default function StandbyList() {
                     Delete
                   </button>
                 )}
-
               </div>
             ) : (
               <div className="flex gap-2">
@@ -2320,11 +2428,7 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
       <div className="text-sm font-semibold text-slate-800 mb-2">New shift to settle with</div>
 
       <div className="space-y-4">
-        <InputField
-          label="Name"
-          value={mini.person_name}
-          onChange={(v) => setMini((m) => ({ ...m, person_name: toTitleCase(v) }))}
-        />
+        <InputField label="Name" value={mini.person_name} onChange={(v) => setMini((m) => ({ ...m, person_name: toTitleCase(v) }))} />
         <InputField
           label="What platoon is this person on?"
           value={mini.platoon}
@@ -2446,15 +2550,10 @@ function ModalShell({ title, subtitle, children, onClose }) {
           open ? "scale-100" : "scale-[0.98]",
         ].join(" ")}
       >
-      <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-4 py-2 border-b border-slate-100 bg-white">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-4 py-2 border-b border-slate-100 bg-white">
           <div className="min-w-0">
-            <div className="text-lg font-extrabold text-slate-900 truncate leading-tight">
-              {title || ""}
-            </div>
-
-            {subtitle ? (
-              <div className="text-xs text-slate-500 truncate mt-0.5">{subtitle}</div>
-            ) : null}
+            <div className="text-lg font-extrabold text-slate-900 truncate leading-tight">{title || ""}</div>
+            {subtitle ? <div className="text-xs text-slate-500 truncate mt-0.5">{subtitle}</div> : null}
           </div>
 
           <button
@@ -2464,10 +2563,7 @@ function ModalShell({ title, subtitle, children, onClose }) {
           >
             Done
           </button>
-
         </div>
-
-
 
         <div className="px-5 py-5 overflow-y-auto">{children}</div>
       </div>
