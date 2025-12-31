@@ -1691,59 +1691,114 @@ export default function StandbyList() {
     );
   }
 
-    function renderSettings() {
-    const email = session?.user?.email || user?.email || "—";
+   function renderSettings() {
+  const email = session?.user?.email || user?.email || "—";
 
-    async function sendPasswordReset() {
-      if (!email || email === "—") return alert("No email found.");
-      const { error } = await supabase.auth.resetPasswordForEmail(email);
-      if (error) {
-        console.error("Password reset error:", error);
-        alert("Could not send reset email. Check console.");
-        return;
-      }
-      alert("Password reset email sent.");
+  async function sendPasswordReset() {
+    if (!email || email === "—") return alert("No email found.");
+    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    if (error) {
+      console.error("Password reset error:", error);
+      alert("Could not send reset email. Check console.");
+      return;
     }
+    alert("Password reset email sent.");
+  }
 
-    return (
-      <div>
-        <div className="mb-3">
-          <div className="text-lg font-extrabold text-slate-900">Settings</div>
-          <div className="text-sm text-slate-600 mt-1">Account + app info</div>
+  function sendFeedbackEmail() {
+    const to = "cameron.reyniers@gmail.com"; // <-- change this
+    const subject = encodeURIComponent("Shift IOU feedback");
+    const body = encodeURIComponent(
+      `Hi,\n\nI have some feedback on Shift IOU:\n\n\n\n—\nUser: ${email}\n`
+    );
+
+    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+  }
+
+  return (
+    <div>
+      <div className="mb-3">
+        <div className="text-lg font-extrabold text-slate-900">Settings</div>
+        <div className="text-sm text-slate-600 mt-1">Account + app info</div>
+      </div>
+
+      <div className="space-y-3">
+        {/* Account */}
+        <div className="rounded-md border border-slate-200 bg-white p-4">
+          <div className="text-sm font-extrabold text-slate-900">Account</div>
+
+          <div className="mt-2 text-sm text-slate-700">
+            <div className="text-xs font-semibold text-slate-500">Email</div>
+            <div className="mt-0.5 font-semibold">{email}</div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={sendPasswordReset}
+              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            >
+              Change password
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-3">
-          <div className="rounded-md border border-slate-200 bg-white p-4">
-            <div className="text-sm font-extrabold text-slate-900">Account</div>
-            <div className="mt-2 text-sm text-slate-700">
-              <div className="text-xs font-semibold text-slate-500">Email</div>
-              <div className="mt-0.5 font-semibold">{email}</div>
-            </div>
-
-            <div className="mt-3 flex flex-wrap gap-2">
+        {/* About */}
+        <div className="rounded-md border border-slate-200 bg-white p-4">
+          <div className="text-sm font-extrabold text-slate-900">About</div>
+            <div className="mt-3">
               <button
-                type="button"
-                onClick={sendPasswordReset}
-                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-              >
-                Change password
-              </button>
-            </div>
-          </div>
+              type="button"
+              onClick={sendFeedbackEmail}
+              className="rounded-md bg-slate-900 text-white px-3 py-2 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition shadow-sm"
+            >
+              Send app feedback to Cam
+            </button>
 
-          <div className="rounded-md border border-slate-200 bg-white p-4">
-            <div className="text-sm font-extrabold text-slate-900">About</div>
-            <div className="mt-2 text-sm text-slate-700 leading-relaxed">
-              Privacy, disclaimers, and general info go here.
             </div>
-            <div className="mt-2 text-xs text-slate-500">
-              Tip: when you paste your wording, I’ll format it nicely and add links/sections.
+          <div className="mt-2 text-sm text-slate-700 leading-relaxed space-y-3">
+          <p>
+            This app started as a personal side project. I built it because I was frustrated that there wasn’t an easy way
+            to track standby commitments — after trying spreadsheets, Notes apps, and old-fashioned pen and paper with limited success.
+          </p>
+
+          <p>
+            It’s designed as a simple, private tool to help individuals keep track of their own arrangements. It is not an
+            official system of record and should not be relied on as your only source of truth for anything important.
+          </p>
+
+          <p>
+            This app is not affiliated with, endorsed by, or connected to DFES or any other organisation.
+          </p>
+
+          <p>
+            Your data is stored per-account and protected by access controls, but this is a personal beta project and no
+            guarantees are made about uptime, accuracy, or data retention. Please keep your own backup if the information
+            matters to you.
+          </p>
+
+          <p>
+            By using this app you accept that it is provided “as-is”, and that no responsibility is taken for any
+            data loss, errors, or consequences arising from its use.
+          </p>
+
+          <div className="pt-2 border-t border-slate-100">
+            <div className="text-xs font-semibold text-slate-500">Privacy</div>
+            <div className="text-sm text-slate-700">
+              Your entries are private to your account and are not visible to other users. No data is sold, shared, or used
+              for any purpose other than providing the app’s functionality.
             </div>
-          </div>
+  </div>
+</div>
+
+
+          
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
+
 
   // -----------------------------
   // Logged out

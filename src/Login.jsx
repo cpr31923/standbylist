@@ -329,7 +329,13 @@ const styles = {
     padding: 18,
     boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
   },
-  title: { margin: "0 0 12px", fontSize: 28 },
+  title: {
+  margin: "0 0 16px",
+  fontSize: 42,
+  fontWeight: 750,
+  letterSpacing: "-0.01em",
+},
+
 
   segment: {
     display: "flex",
