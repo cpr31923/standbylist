@@ -2,10 +2,24 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+
+    <!-- Better mobile scaling + prevent weird zoom behaviour -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+
+    <!-- App identity -->
+    <title>Shift IOU</title>
+
+    <!-- (Optional) keep Vite icon for now; replace later with real icons -->
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>standby-app</title>
+
+    <!-- iOS web app feel (doesn't make it a true PWA, but improves UX) -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   </head>
+
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>

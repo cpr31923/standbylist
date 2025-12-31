@@ -66,6 +66,22 @@ function toTitleCase(s) {
     .join(" ");
 }
 
+function toTitleCaseLive(input) {
+  const raw = String(input || "").replace(/\s+/g, " ");
+  if (!raw) return "";
+
+  const endsWithSpace = /\s$/.test(input);
+  const core = raw.trim();
+
+  const titled = core
+    .split(" ")
+    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
+    .join(" ");
+
+  return endsWithSpace ? `${titled} ` : titled;
+}
+
+
 function makeUUID() {
   if (crypto?.randomUUID) return crypto.randomUUID();
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -99,33 +115,51 @@ function firstName(full) {
 }
 
 function rowSentence(s) {
+  // For deleted standbys: show date + shift type only (no narrative)
+  if (s?.deleted_at) {
+    const date = formatDisplayDate(s?.shift_date);
+    const st = shiftTypeShort(s);
+    return `${date}${st ? ` ${st}` : ""}`;
+  }
+
   const name = firstName(s?.person_name);
   const date = formatDisplayDate(s?.shift_date);
-  const platoon = formatPlatoonLabel(s?.duty_platoon || s?.platoon); // prefer duty_platoon if present
+  const platoon = formatPlatoonLabel(s?.duty_platoon || s?.platoon);
   const st = shiftTypeShort(s);
   const stPart = st ? ` ${st}` : "";
+  const future = isFuture(s?.shift_date);
 
   // worked_for_me === true  => they worked for you (so you owe them)
   // worked_for_me === false => you worked for them (so they owe you)
   if (s?.worked_for_me) {
-    return `${name} worked for you on ${date} - ${platoon}${stPart}.`;
+    return future
+      ? `${name} will work for you on ${date} - ${platoon}${stPart}.`
+      : `${name} worked for you on ${date} - ${platoon}${stPart}.`;
   }
-  return `You worked for ${name} on ${date} - ${platoon}${stPart}.`;
+
+  return future
+    ? `You will work for ${name} on ${date} - ${platoon}${stPart}.`
+    : `You worked for ${name} on ${date} - ${platoon}${stPart}.`;
 }
+
 
 
 export default function StandbyList() {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
 
+  const [overallPlus, setOverallPlus] = useState(0);  // owed to me (worked_for_me = false)
+  const [overallMinus, setOverallMinus] = useState(0); // I owe (worked_for_me = true)
+
+
   // Drawer / navigation
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Collapsible groups in drawer
-  const [drawerGroup, setDrawerGroup] = useState("standbys"); // standbys | upcoming | history (which is expanded)
+  const [drawerGroup, setDrawerGroup] = useState(""); // "" | standbys | upcoming | history
 
   // Top-level section
-  const [section, setSection] = useState("standbys"); // standbys | upcoming | history
+  const [section, setSection] = useState("standbys"); // standbys | upcoming | history | settings
 
   // Sub-tabs
   const [standbysSubtab, setStandbysSubtab] = useState("owed"); // owed | owe
@@ -250,6 +284,27 @@ export default function StandbyList() {
     setUser(null);
     window.location.reload();
   }
+  // -----------------------------
+  // Prevent horizontal scroll (app should always fit device width)
+  // -----------------------------
+  useEffect(() => {
+    const prevHtml = document.documentElement.style.overflowX;
+    const prevBody = document.body.style.overflowX;
+    document.documentElement.style.overflowX = "hidden";
+    document.body.style.overflowX = "hidden";
+    return () => {
+      document.documentElement.style.overflowX = prevHtml;
+      document.body.style.overflowX = prevBody;
+    };
+  }, []);
+
+  // -----------------------------
+  // Drawer should always open collapsed
+  // -----------------------------
+  useEffect(() => {
+    if (drawerOpen) setDrawerGroup("");
+  }, [drawerOpen]);
+
 
   // -----------------------------
   // Scroll lock when modal open
@@ -314,6 +369,15 @@ export default function StandbyList() {
     setDrawerOpen(false);
   }
 
+  function goSettings() {
+    resetOverlays();
+    setSection("settings");
+    setDrawerGroup("");
+    setFiltersOpen(false);
+    setDrawerOpen(false);
+  }
+
+
   function statusText(s) {
     if (s.deleted_at) return "Deleted";
     if (s.settled) return "Settled";
@@ -327,32 +391,72 @@ export default function StandbyList() {
     return `This shift ${tense} a: ${sp} ${st.toLowerCase()} shift`;
   }
 
-  function detailNarrative(s) {
-    const name = s?.person_name || "—";
+    function detailNarrative(s) {
+    const nameFull = s?.person_name || "—";
+    const name = firstName(nameFull);
     const platoon = formatPlatoonLabel(s?.platoon);
     const date = formatDisplayDate(s?.shift_date);
     const st = shiftTypeShort(s);
     const stPart = st ? ` ${st}` : "";
     const future = isFuture(s?.shift_date);
 
-    // NOTE CONTINUED: settled + upcoming wording
-    if (s?.settled && future) {
-      if (s?.worked_for_me) {
-        return `Once ${name} works for you on ${date}${stPart}, your shifts will be settled.`;
+    // Deleted: keep it simple
+    if (s?.deleted_at) {
+      return `Deleted standby: ${date}${stPart}.`;
+    }
+
+    // If this shift is settled AND has a partner, write the "pair-style" messaging
+    if (s?.settled && s?.settlement_group_id) {
+      const other = findPartnerShift(s);
+
+      if (other) {
+        const myDate = String(s.shift_date || "");
+        const otherDate = String(other.shift_date || "");
+        // The later-dated shift is considered the "settling" shift.
+        // If equal, fall back to id comparison (stable enough).
+        const isSettlingShift =
+          myDate > otherDate || (myDate === otherDate && String(s.id) > String(other.id));
+
+        if (!isSettlingShift) {
+          // The obligation shift (no "you owe them / they owe you" line)
+          if (s.worked_for_me) {
+            return `${nameFull} (${platoon}) worked for you on ${date}${stPart}.`;
+          }
+          return `You worked for ${nameFull} (${platoon}) on ${date}${stPart}.`;
+        }
+
+        // The settling shift ("once..." wording, tense-aware)
+        const settledAlready = !isFuture(s.shift_date); // if this settling shift date is in the past, use past tense
+        if (s.worked_for_me) {
+          return settledAlready
+            ? `After ${name} worked for you on ${date}${stPart}, your shifts are settled.`
+            : `Once ${name} works for you on ${date}${stPart}, your shifts will be settled.`;
+        }
+
+        return settledAlready
+          ? `After you worked for ${name} on ${date}${stPart}, your shifts are settled.`
+          : `Once you work for ${name} on ${date}${stPart}, your shifts will be settled.`;
       }
-      return `Once you work for ${name} on ${date}${stPart}, your shifts will be settled.`;
     }
 
+    // Unsettled (or settled single without partner) keeps the owe/owed wording
     if (s?.worked_for_me) {
-      if (future)
-        return `${name} (${platoon}) will work for you on ${date}${stPart}. You will owe them a shift.`;
-      return `${name} (${platoon}) worked for you on ${date}${stPart}. You owe them a shift.`;
+      if (future) return `${nameFull} (${platoon}) will work for you on ${date}${stPart}. You will owe them a shift.`;
+      return `${nameFull} (${platoon}) worked for you on ${date}${stPart}. You owe them a shift.`;
     }
 
-    if (future)
-      return `You will work for ${name} (${platoon}) on ${date}${stPart}. They will owe you a shift.`;
-    return `You worked for ${name} (${platoon}) on ${date}${stPart}. They owe you a shift.`;
+    if (future) return `You will work for ${nameFull} (${platoon}) on ${date}${stPart}. They will owe you a shift.`;
+    return `You worked for ${nameFull} (${platoon}) on ${date}${stPart}. They owe you a shift.`;
   }
+
+
+  function findPartnerShift(s) {
+    if (!s?.settlement_group_id) return null;
+    const gid = s.settlement_group_id;
+    const groupRows = standbys.filter((r) => r.settlement_group_id === gid && r.id !== s.id);
+    return groupRows.length ? groupRows[0] : null;
+  }
+
 
   // -----------------------------
   // Keep edit form in sync
@@ -442,6 +546,44 @@ export default function StandbyList() {
 
     fetchStandbys();
   }, [section, standbysSubtab, upcomingSubtab, historySubtab, user?.id, refreshTick]);
+
+  // -----------------------------
+  // Overall standby position (counts across all unsettled, not deleted)
+  // -----------------------------
+  useEffect(() => {
+    if (!user?.id) {
+      setOverallPlus(0);
+      setOverallMinus(0);
+      return;
+    }
+
+    (async () => {
+      const { data, error } = await supabase
+        .from("standby_events")
+        .select("worked_for_me, settled, deleted_at")
+        .eq("user_id", user.id)
+        .is("deleted_at", null)
+        .eq("settled", false);
+
+      if (error) {
+        console.warn("Overall counts fetch failed:", error);
+        setOverallPlus(0);
+        setOverallMinus(0);
+        return;
+      }
+
+      let plus = 0;
+      let minus = 0;
+      for (const r of data || []) {
+        if (r.worked_for_me) minus += 1; // I owe them
+        else plus += 1; // they owe me
+      }
+
+      setOverallPlus(plus);
+      setOverallMinus(minus);
+    })();
+  }, [user?.id, refreshTick]);
+
 
   // -----------------------------
   // Platoon auto-fill from roster function
@@ -1010,9 +1152,11 @@ export default function StandbyList() {
     return historySubtab === "settled" ? "Settled" : "Deleted";
   }
 
-  function totalLabel() {
+   function totalLabel() {
     if (section === "standbys" && standbysSubtab === "owed") return "Total standbys owed to me:";
     if (section === "standbys" && standbysSubtab === "owe") return "Total standbys I owe:";
+    if (section === "upcoming" && upcomingSubtab === "they_work") return "Total upcoming shifts off:";
+    if (section === "upcoming" && upcomingSubtab === "i_work") return "Total upcoming shifts I’ve agreed to:";
     if (section === "history" && historySubtab === "settled") return "Total settled:";
     return "Total deleted:";
   }
@@ -1073,8 +1217,17 @@ export default function StandbyList() {
         <div className="absolute inset-y-0 left-0 w-[80%] max-w-[330px] bg-white text-slate-900 shadow-xl border-r border-slate-200 flex flex-col">
           <div className="px-4 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-sm font-extrabold text-slate-900 leading-tight">Shift IOU</div>
-              <div className="text-[11px] text-slate-500 truncate mt-0.5">{emailLabel}</div>
+              <div className="text-lg font-extrabold text-slate-900 leading-tight">Shift IOU</div>
+              <div className="text-[12px] text-slate-500 truncate mt-0.5">{emailLabel}</div>
+
+               <div className="mt-2">
+                <div className="text-[11px] font-semibold text-slate-500">Overall Standby Position:</div>
+                <div className="mt-0.5 text-base font-extrabold tracking-tight">
+                  <span className={overallPlus > 0 ? "text-emerald-600" : "text-slate-700"}>owed {overallPlus}</span>
+                  <span className="text-slate-400"> / </span>
+                  <span className={overallMinus > 0 ? "text-rose-600" : "text-slate-700"}>owe {overallMinus}</span>
+                </div>
+              </div>
             </div>
 
             <button
@@ -1091,7 +1244,7 @@ export default function StandbyList() {
             <button
               type="button"
               onClick={() => openAddStandbyModal()}
-              className="w-full rounded-md bg-slate-900 text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
+              className="w-full rounded-md bg-slate-900 text-white px-3 py-2.5 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
             >
               + Add Standby
             </button>
@@ -1138,15 +1291,23 @@ export default function StandbyList() {
             </Group>
           </div>
 
-          <div className="mt-auto px-4 py-4 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-            >
-              Sign out
-            </button>
-          </div>
+          <div className="mt-auto px-4 py-4 border-t border-slate-100 space-y-2">
+                <button
+                  type="button"
+                  onClick={goSettings}
+                  className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                >
+                  Settings
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                >
+                  Sign out
+                </button>
+              </div>
         </div>
       </div>
     );
@@ -1169,10 +1330,6 @@ export default function StandbyList() {
               <div className="text-[12px] text-slate-500 truncate">
                 {rowSentence(s)}
                 </div>
-              <div className="text-[11px] text-slate-400 mt-0.5">
-                {formatDisplayDate(s.shift_date)}
-                {shiftTypeShort(s) ? ` • ${shiftTypeShort(s)}` : ""}
-              </div>
             </div>
 
             <span className="text-slate-300" aria-hidden>
@@ -1200,69 +1357,75 @@ export default function StandbyList() {
     return (
       <div className="mb-3">
         <div className="flex items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((v) => !v)}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-          >
-            {filtersOpen ? "Hide filters" : "Filters"}
-            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
-          </button>
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            >
+              {filtersOpen ? "Hide filters" : "Filters"}
+              {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={resetFilters}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-          >
-            Reset
-          </button>
-        </div>
 
         {filtersOpen && (
-          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-4">
-            <input
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              placeholder="Search name or platoon…"
-              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
-            />
+          <div className="mt-2 space-y-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+              <input
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Search name or platoon…"
+                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
+              />
 
-            <select
-              value={platoonFilter}
-              onChange={(e) => setPlatoonFilter(e.target.value)}
-              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
-            >
-              <option value="">All platoons</option>
-              {platoonOptions.map((p) => (
-                <option key={p} value={p}>
-                  {p ? (String(p).toUpperCase().includes("PLATOON") ? p : `${p} Platoon`) : "-"}
-                </option>
-              ))}
-            </select>
-
-            {showSort ? (
               <select
-                value={sortMode}
-                onChange={(e) => setSortMode(e.target.value)}
+                value={platoonFilter}
+                onChange={(e) => setPlatoonFilter(e.target.value)}
                 className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
               >
-                <option value={defaultSort}>
-                  {defaultSort === "date_asc" ? "Date (oldest)" : "Date (newest)"}
-                </option>
-                <option value="date_desc">Date (newest)</option>
-                <option value="date_asc">Date (oldest)</option>
-                <option value="name_az">Name (A–Z)</option>
-                <option value="name_za">Name (Z–A)</option>
-                <option value="platoon_az">Platoon (A–Z)</option>
-                <option value="platoon_za">Platoon (Z–A)</option>
+                <option value="">All platoons</option>
+                {platoonOptions.map((p) => (
+                  <option key={p} value={p}>
+                    {p ? (String(p).toUpperCase().includes("PLATOON") ? p : `${p} Platoon`) : "-"}
+                  </option>
+                ))}
               </select>
-            ) : (
-              <div />
-            )}
 
-            <div />
+              {showSort ? (
+                <select
+                  value={sortMode}
+                  onChange={(e) => setSortMode(e.target.value)}
+                  className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
+                >
+                  <option value={defaultSort}>
+                    {defaultSort === "date_asc" ? "Date (oldest)" : "Date (newest)"}
+                  </option>
+                  <option value="date_desc">Date (newest)</option>
+                  <option value="date_asc">Date (oldest)</option>
+                  <option value="name_az">Name (A–Z)</option>
+                  <option value="name_za">Name (Z–A)</option>
+                  <option value="platoon_az">Platoon (A–Z)</option>
+                  <option value="platoon_za">Platoon (Z–A)</option>
+                </select>
+              ) : (
+                <div />
+              )}
+
+              <div />
+            </div>
+
+            <div>
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+              >
+                Reset filters
+              </button>
+            </div>
           </div>
         )}
+
       </div>
     );
   }
@@ -1335,7 +1498,7 @@ export default function StandbyList() {
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setSettleChoice("new")}
-              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-800 active:scale-[0.99] transition"
+              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 active:scale-[0.99] transition"
               type="button"
             >
               New shift
@@ -1423,7 +1586,7 @@ export default function StandbyList() {
               {settleWithExistingId && (
                 <button
                   onClick={() => settleSelectedWithExisting(settleWithExistingId)}
-                  className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-800 active:scale-[0.99] transition"
+                  className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 active:scale-[0.99] transition"
                   type="button"
                 >
                   Settle now
@@ -1528,6 +1691,60 @@ export default function StandbyList() {
     );
   }
 
+    function renderSettings() {
+    const email = session?.user?.email || user?.email || "—";
+
+    async function sendPasswordReset() {
+      if (!email || email === "—") return alert("No email found.");
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      if (error) {
+        console.error("Password reset error:", error);
+        alert("Could not send reset email. Check console.");
+        return;
+      }
+      alert("Password reset email sent.");
+    }
+
+    return (
+      <div>
+        <div className="mb-3">
+          <div className="text-lg font-extrabold text-slate-900">Settings</div>
+          <div className="text-sm text-slate-600 mt-1">Account + app info</div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="rounded-md border border-slate-200 bg-white p-4">
+            <div className="text-sm font-extrabold text-slate-900">Account</div>
+            <div className="mt-2 text-sm text-slate-700">
+              <div className="text-xs font-semibold text-slate-500">Email</div>
+              <div className="mt-0.5 font-semibold">{email}</div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={sendPasswordReset}
+                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+              >
+                Change password
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-slate-200 bg-white p-4">
+            <div className="text-sm font-extrabold text-slate-900">About</div>
+            <div className="mt-2 text-sm text-slate-700 leading-relaxed">
+              Privacy, disclaimers, and general info go here.
+            </div>
+            <div className="mt-2 text-xs text-slate-500">
+              Tip: when you paste your wording, I’ll format it nicely and add links/sections.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // -----------------------------
   // Logged out
   // -----------------------------
@@ -1546,7 +1763,7 @@ export default function StandbyList() {
   // Main render
   // -----------------------------
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-white overflow-x-hidden">
       <Drawer />
 
       {/* Top bar */}
@@ -1561,14 +1778,16 @@ export default function StandbyList() {
             ☰
           </button>
 
-          <div className="text-sm font-extrabold text-slate-900 truncate">{sectionTitle()}</div>
+          <div className="text-2xl font-bold text-slate-900 tracking-tight truncate">
+            {sectionTitle()}
+            </div>
 
           <button
             type="button"
             onClick={() => openAddStandbyModal()}
-            className="rounded-md bg-slate-900 text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
+            className="rounded-md bg-slate-900 text-white px-3 py-2 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
           >
-            + Add
+            + Add Standby
           </button>
         </div>
       </div>
@@ -1580,7 +1799,8 @@ export default function StandbyList() {
           </div>
         )}
 
-        {renderList()}
+        {section === "settings" ? renderSettings() : renderList()}
+
       </div>
 
       {/* Add Modal */}
@@ -1660,7 +1880,8 @@ export default function StandbyList() {
               <input
                 list="nameSuggestions"
                 value={form.person_name}
-                onChange={(e) => setForm((f) => ({ ...f, person_name: toTitleCase(e.target.value) }))}
+                onChange={(e) => setForm((f) => ({ ...f, person_name: toTitleCaseLive(e.target.value) }))}
+                onBlur={() => setForm((f) => ({ ...f, person_name: toTitleCase(f.person_name) }))}
                 placeholder="Start typing…"
                 className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
               />
@@ -1712,11 +1933,11 @@ export default function StandbyList() {
               />
             )}
 
-            <div className="sticky bottom-0 -mx-5 px-5 py-4 bg-white border-t border-slate-100">
+            <div className="mt-4 border-t border-slate-100 pt-4">
               <div className="flex gap-2">
                 <button
                   type="submit"
-                  className="flex-1 rounded-md bg-slate-900 text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
+                  className="flex-1 rounded-md bg-slate-900 text-white px-3 py-2.5 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
                 >
                   Add
                 </button>
@@ -1740,22 +1961,19 @@ export default function StandbyList() {
 
       {/* Detail Modal */}
       {selectedStandby && (
-        <ModalShell title="" onClose={resetOverlays}>
+        <ModalShell
+            title={toTitleCase(selectedStandby.person_name)}
+            onClose={resetOverlays}
+        >
           {!isEditing ? (
             <div className="space-y-4">
               <div className="rounded-md border border-slate-200 bg-white p-4">
-                <div className="text-sm font-extrabold text-slate-900">Standby</div>
                 <div className="mt-2 text-sm text-slate-700 leading-relaxed">{detailNarrative(selectedStandby)}</div>
-
                 <div className="mt-3 flex items-center justify-between">
                   <div className="text-xs font-semibold text-slate-500">Status</div>
                   <StatusPill text={statusText(selectedStandby)} />
                 </div>
 
-                <div className="mt-3 text-xs text-slate-400">
-                  {formatDisplayDate(selectedStandby.shift_date)}
-                  {shiftTypeShort(selectedStandby) ? ` • ${shiftTypeShort(selectedStandby)}` : ""}
-                </div>
               </div>
 
               {selectedStandby.notes && (
@@ -1767,11 +1985,17 @@ export default function StandbyList() {
             </div>
           ) : (
             <div className="space-y-4">
-              <InputField
-                label="Name"
-                value={editForm.person_name}
-                onChange={(v) => setEditForm((f) => ({ ...f, person_name: toTitleCase(v) }))}
-              />
+              <div>
+                <label className="text-sm font-semibold text-slate-700">Name</label>
+                <input
+                  value={editForm.person_name}
+                  onChange={(e) => setEditForm((f) => ({ ...f, person_name: toTitleCaseLive(e.target.value) }))}
+                  onBlur={() => setEditForm((f) => ({ ...f, person_name: toTitleCase(f.person_name) }))}
+                  placeholder="Start typing…"
+                  className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
+                />
+              </div>
+
               <InputField
                 label="What platoon is this person on?"
                 value={editForm.platoon}
@@ -1832,22 +2056,15 @@ export default function StandbyList() {
             </div>
           )}
 
-          <div className="sticky bottom-0 -mx-5 px-5 py-4 bg-white border-t border-slate-100 mt-5">
+          <div className="mt-5 border-t border-slate-100 pt-4">
             {section === "history" && historySubtab === "deleted" ? (
               <div className="flex gap-2">
                 <button
                   onClick={() => restoreStandby(selectedStandby.id)}
-                  className="flex-1 rounded-md bg-emerald-600 px-3 py-2.5 text-sm font-semibold text--slate-900 hover:bg-emerald-500 active:scale-[0.99] transition"
+                  className="flex-1 rounded-md bg-emerald-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 active:scale-[0.99] transition"
                   type="button"
                 >
                   Restore
-                </button>
-                <button
-                  onClick={resetOverlays}
-                  className="flex-1 rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-                  type="button"
-                >
-                  Close
                 </button>
               </div>
             ) : !isEditing ? (
@@ -1879,26 +2096,19 @@ export default function StandbyList() {
                 {!selectedStandby.deleted_at && (
                   <button
                     onClick={() => deleteStandby(selectedStandby.id)}
-                    className="rounded-md bg-rose-600 text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-rose-700 active:scale-[0.99] transition"
+                    className="rounded-md bg-rose-600 text-white px-3 py-2.5 text-sm font-semibold hover:bg-rose-700 active:scale-[0.99] transition"
                     type="button"
                   >
                     Delete
                   </button>
                 )}
 
-                <button
-                  onClick={resetOverlays}
-                  className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-                  type="button"
-                >
-                  Close
-                </button>
               </div>
             ) : (
               <div className="flex gap-2">
                 <button
                   onClick={saveEdits}
-                  className="flex-1 rounded-md bg-slate-900 px-3 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-800 active:scale-[0.99] transition"
+                  className="flex-1 rounded-md bg-slate-900 px-3 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 active:scale-[0.99] transition"
                   type="button"
                 >
                   Save
@@ -2129,7 +2339,7 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
 
               onCreate(payload, mini.threeWay);
             }}
-            className="flex-1 rounded-md bg-slate-900 px-3 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-800 active:scale-[0.99] transition"
+            className="flex-1 rounded-md bg-slate-900 px-3 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 active:scale-[0.99] transition"
             type="button"
           >
             Create & settle
@@ -2147,7 +2357,7 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
   );
 }
 
-function ModalShell({ title, children, onClose }) {
+function ModalShell({ title, subtitle, children, onClose }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setOpen(true), 10);
@@ -2181,17 +2391,28 @@ function ModalShell({ title, children, onClose }) {
           open ? "scale-100" : "scale-[0.98]",
         ].join(" ")}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-100 bg-white">
-          <div className="text-base font-extrabold text-slate-900 truncate">{title || ""}</div>
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-4 py-2 border-b border-slate-100 bg-white">
+          <div className="min-w-0">
+            <div className="text-lg font-extrabold text-slate-900 truncate leading-tight">
+              {title || ""}
+            </div>
+
+            {subtitle ? (
+              <div className="text-xs text-slate-500 truncate mt-0.5">{subtitle}</div>
+            ) : null}
+          </div>
+
           <button
             onClick={requestClose}
-            className="rounded-md p-2 text-slate-700 hover:bg-slate-100 active:scale-[0.98] transition"
-            aria-label="Close"
+            className="rounded-md px-2 py-1 text-sm font-semibold text-slate-600 hover:bg-slate-100 active:scale-[0.98] transition"
             type="button"
           >
-            ✕
+            Done
           </button>
+
         </div>
+
+
 
         <div className="px-5 py-5 overflow-y-auto">{children}</div>
       </div>

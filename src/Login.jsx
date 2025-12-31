@@ -4,22 +4,58 @@ import { supabase } from "./supabaseClient";
 
 export default function Login() {
   const [mode, setMode] = useState("signin"); // signin | signup | reset
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  // Signup email-first flow
+  const [signupStep, setSignupStep] = useState("email"); // email | details
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+
+  // UX
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const [debugSession, setDebugSession] = useState("unknown");
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     setMsg("");
     setErr("");
+    setLoading(false);
+    setShowPassword(false);
+
+    if (mode === "signup") setSignupStep("email");
+    if (mode !== "signup") {
+      setSignupStep("email");
+      setFirstName("");
+      setLastName("");
+    }
   }, [mode]);
 
-  async function refreshDebugSession() {
-    const { data } = await supabase.auth.getSession();
-    setDebugSession(data?.session ? "YES" : "NO");
+  const cleanEmail = (email || "").trim().toLowerCase();
+
+  async function sendReset(emailToReset) {
+    const e = (emailToReset || "").trim().toLowerCase();
+    if (!e) {
+      setErr("Please enter an email.");
+      return;
+    }
+
+    setLoading(true);
+    setMsg("");
+    setErr("");
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(e, {
+        redirectTo: window.location.origin,
+      });
+      if (error) throw error;
+      setMsg("Password reset email sent. Check your inbox.");
+    } catch (e2) {
+      setErr(e2?.message || "Could not send reset email.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleSubmit(e) {
@@ -29,12 +65,12 @@ export default function Login() {
     setErr("");
 
     try {
-      if (!email) throw new Error("Please enter an email.");
-      if (mode !== "reset" && !password) throw new Error("Please enter a password.");
+      if (!cleanEmail) throw new Error("Please enter an email.");
 
-      const cleanEmail = email.trim().toLowerCase();
-
+      // SIGN IN
       if (mode === "signin") {
+        if (!password) throw new Error("Please enter a password.");
+
         const { error } = await supabase.auth.signInWithPassword({
           email: cleanEmail,
           password,
@@ -42,34 +78,56 @@ export default function Login() {
         if (error) throw error;
 
         setMsg("Signed in.");
-        await refreshDebugSession();
+        return;
       }
 
+      // RESET
+      if (mode === "reset") {
+        await sendReset(cleanEmail);
+        return;
+      }
+
+      // SIGN UP (email-first)
       if (mode === "signup") {
+        if (signupStep === "email") {
+          setSignupStep("details");
+          return;
+        }
+
+        if (!firstName.trim()) throw new Error("Please enter your first name.");
+        if (!lastName.trim()) throw new Error("Please enter your last name.");
+        if (!password) throw new Error("Please create a password (min 6 characters).");
+        if (password.length < 6) throw new Error("Password must be at least 6 characters.");
+
         const { data, error } = await supabase.auth.signUp({
           email: cleanEmail,
           password,
-          options: { emailRedirectTo: window.location.origin },
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: {
+              first_name: firstName.trim(),
+              last_name: lastName.trim(),
+              full_name: `${firstName.trim()} ${lastName.trim()}`.trim(),
+            },
+          },
         });
-        if (error) throw error;
+
+        if (error) {
+          const m = String(error.message || "").toLowerCase();
+          if (m.includes("already") || m.includes("registered") || m.includes("exists")) {
+            setErr("That email already has an account. Use Sign in, or reset your password.");
+            setMode("reset");
+            return;
+          }
+          throw error;
+        }
 
         if (data?.session) {
           setMsg("Account created and signed in.");
         } else {
-          setMsg(
-            "If this email is new, check your inbox to confirm your account. If you already have an account, use Sign in or Forgot password."
-          );
+          setMsg("Account created. Check your inbox to confirm your email, then come back and sign in.");
         }
-        await refreshDebugSession();
-      }
-
-      if (mode === "reset") {
-        const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-          redirectTo: window.location.origin,
-        });
-        if (error) throw error;
-
-        setMsg("Password reset email sent. Check your inbox.");
+        return;
       }
     } catch (e2) {
       setErr(e2?.message || "Something went wrong.");
@@ -81,28 +139,28 @@ export default function Login() {
   return (
     <div style={styles.wrap}>
       <div style={styles.card}>
-        <h1 style={styles.title}>Standby Ledger</h1>
+        <h1 style={styles.title}>Shift IOU</h1>
 
-
-        <div style={styles.tabs}>
+        {/* Segmented tabs: stays on one line */}
+        <div style={styles.segment}>
           <button
             type="button"
             onClick={() => setMode("signin")}
-            style={{ ...styles.tab, ...(mode === "signin" ? styles.tabActive : {}) }}
+            style={{ ...styles.segmentBtn, ...(mode === "signin" ? styles.segmentBtnActive : {}) }}
           >
             Sign in
           </button>
           <button
             type="button"
             onClick={() => setMode("signup")}
-            style={{ ...styles.tab, ...(mode === "signup" ? styles.tabActive : {}) }}
+            style={{ ...styles.segmentBtn, ...(mode === "signup" ? styles.segmentBtnActive : {}) }}
           >
             Create account
           </button>
           <button
             type="button"
             onClick={() => setMode("reset")}
-            style={{ ...styles.tab, ...(mode === "reset" ? styles.tabActive : {}) }}
+            style={{ ...styles.segmentBtn, ...(mode === "reset" ? styles.segmentBtnActive : {}) }}
           >
             Forgot password
           </button>
@@ -121,37 +179,134 @@ export default function Login() {
             />
           </label>
 
-          {mode !== "reset" && (
+          {mode === "signin" && (
             <label style={styles.label}>
               Password
-              <input
-                style={styles.input}
-                type="password"
-                autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === "signup" ? "Create a password" : "Your password"}
-              />
+              <div style={styles.passwordRow}>
+                <input
+                  style={{ ...styles.input, ...styles.passwordInput }}
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Your password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  style={styles.eyeBtn}
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
             </label>
+          )}
+
+          {mode === "reset" && (
+            <div style={styles.helpBlock}>
+              Enter your email and we’ll send a password reset link.
+              <div style={{ height: 10 }} />
+              <button
+                type="button"
+                style={styles.secondaryBtn}
+                onClick={() => sendReset(cleanEmail)}
+                disabled={loading}
+              >
+                {loading ? "Working…" : "Send reset email"}
+              </button>
+            </div>
+          )}
+
+          {mode === "signup" && (
+            <>
+              {signupStep === "email" ? (
+                <div style={styles.helpBlock}>
+                  Start with your email. Next you’ll set a password and add your name.
+                </div>
+              ) : (
+                <>
+                  <div style={styles.twoCol}>
+                    <label style={styles.label}>
+                      First name
+                      <input
+                        style={styles.input}
+                        value={firstName}
+                        onChange={(e) => setFirstName(e.target.value)}
+                        placeholder="First name"
+                        autoComplete="given-name"
+                      />
+                    </label>
+                    <label style={styles.label}>
+                      Last name
+                      <input
+                        style={styles.input}
+                        value={lastName}
+                        onChange={(e) => setLastName(e.target.value)}
+                        placeholder="Last name"
+                        autoComplete="family-name"
+                      />
+                    </label>
+                  </div>
+
+                  <label style={styles.label}>
+                    Create password
+                    <div style={styles.passwordRow}>
+                      <input
+                        style={{ ...styles.input, ...styles.passwordInput }}
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="new-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Create a password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        style={styles.eyeBtn}
+                      >
+                        {showPassword ? "Hide" : "Show"}
+                      </button>
+                    </div>
+                  </label>
+                </>
+              )}
+            </>
           )}
 
           {err && <div style={styles.err}>{err}</div>}
           {msg && <div style={styles.msg}>{msg}</div>}
 
-          <button type="submit" style={styles.btn} disabled={loading}>
-            {loading
-              ? "Working…"
-              : mode === "signin"
-              ? "Sign in"
-              : mode === "signup"
-              ? "Create account"
-              : "Send reset email"}
-          </button>
+          {mode !== "reset" && (
+            <button type="submit" style={styles.btn} disabled={loading}>
+              {loading
+                ? "Working…"
+                : mode === "signin"
+                ? "Sign in"
+                : signupStep === "email"
+                ? "Continue"
+                : "Create account"}
+            </button>
+          )}
+
+          {mode === "signup" && signupStep === "details" && (
+            <button
+              type="button"
+              style={styles.secondaryBtn}
+              onClick={() => setSignupStep("email")}
+              disabled={loading}
+            >
+              Back
+            </button>
+          )}
         </form>
 
-        <p style={styles.help}>
-          Tip: If sign up says “check your email”, confirm the email first, then come back and sign in.
-        </p>
+        {/* Tip only when register tab selected */}
+        {mode === "signup" && (
+          <p style={styles.help}>
+            Tip: If you already have an account, use <b>Sign in</b>. If you’ve forgotten your password, use{" "}
+            <b>Forgot password</b>.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -168,23 +323,33 @@ const styles = {
   },
   card: {
     width: "100%",
-    maxWidth: 420,
+    maxWidth: 460,
     background: "white",
     borderRadius: 16,
     padding: 18,
     boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
   },
   title: { margin: "0 0 12px", fontSize: 28 },
-  tabs: { display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" },
-  tab: {
+
+  segment: {
+    display: "flex",
+    width: "100%",
     border: "1px solid #ddd",
     borderRadius: 999,
-    padding: "8px 12px",
+    overflow: "hidden",
+    marginBottom: 14,
+  },
+  segmentBtn: {
+    flex: 1,
+    padding: "10px 10px",
     background: "white",
     cursor: "pointer",
-    fontSize: 14,
+    fontSize: 13,
+    border: "none",
+    whiteSpace: "nowrap",
   },
-  tabActive: { borderColor: "#111" },
+  segmentBtnActive: { background: "#111", color: "white" },
+
   form: { display: "flex", flexDirection: "column", gap: 12 },
   label: { display: "flex", flexDirection: "column", gap: 6, fontSize: 14 },
   input: {
@@ -192,7 +357,28 @@ const styles = {
     borderRadius: 12,
     border: "1px solid #ddd",
     fontSize: 16,
+    width: "100%",
+    boxSizing: "border-box",
   },
+
+  twoCol: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+  },
+
+  passwordRow: { display: "flex", gap: 8, alignItems: "center" },
+  passwordInput: { flex: 1 },
+  eyeBtn: {
+    borderRadius: 12,
+    border: "1px solid #ddd",
+    background: "white",
+    padding: "10px 12px",
+    cursor: "pointer",
+    fontSize: 14,
+    whiteSpace: "nowrap",
+  },
+
   btn: {
     marginTop: 4,
     padding: "10px 12px",
@@ -203,6 +389,25 @@ const styles = {
     cursor: "pointer",
     fontSize: 16,
   },
+  secondaryBtn: {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #ddd",
+    background: "white",
+    cursor: "pointer",
+    fontSize: 16,
+  },
+
+  helpBlock: {
+    background: "#f7f7f9",
+    border: "1px solid #eee",
+    padding: 12,
+    borderRadius: 12,
+    fontSize: 14,
+    color: "#333",
+    lineHeight: 1.4,
+  },
+
   err: {
     background: "#ffe9e9",
     border: "1px solid #ffb8b8",

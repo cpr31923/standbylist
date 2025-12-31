@@ -21,8 +21,7 @@ export default function App() {
 
     load();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
-      console.log("AUTH EVENT:", event, !!newSession);
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession ?? null);
     });
 
@@ -35,12 +34,7 @@ export default function App() {
   if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
 
   return (
-    <div>
-      {/* Debug line so we can SEE what App thinks */}
-      <div style={{ padding: 8, fontSize: 12, color: "#666" }}>
-        App sees session: <b>{session ? "YES" : "NO"}</b>
-      </div>
-
+    <div style={{ overflowX: "hidden" }}>
       {session ? <StandbyList /> : <Login />}
     </div>
   );
