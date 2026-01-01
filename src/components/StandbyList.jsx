@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient";
 import CalendarView from "./CalendarView";
 import { fetchStandbyById } from "./standby/data";
-
+import OnboardingModal, { STEPS } from "./OnboardingModal";
+import useOnboarding from "../hooks/useOnboarding";
 
 import {
   todayYMD,
@@ -105,6 +106,9 @@ export default function StandbyList() {
 
   // Name mismatch resolution
   const [mismatchResolution, setMismatchResolution] = useState(""); // "" | "threeway" | "same"
+  const [showOtherReasonPrompt, setShowOtherReasonPrompt] = useState(false);
+  const [otherReasonNote, setOtherReasonNote] = useState("");
+
 
   // Add form
   const [form, setForm] = useState({
@@ -121,6 +125,12 @@ export default function StandbyList() {
 
   // Prevent auto-fill fighting the user
   const dutyPlatoonManualRef = useRef(false);
+  const pendingNewShiftNoteRef = useRef("");
+
+
+  // Onboarding spotlight targets
+  const menuBtnRef = useRef(null);
+  const addBtnRef = useRef(null);
 
   // Edit form
   const [isEditing, setIsEditing] = useState(false);
@@ -133,7 +143,23 @@ export default function StandbyList() {
     worked_for_me: false,
   });
 
-async function openDetail(row) {
+  const {
+    open: onboardingOpen,
+    setOpen: setOnboardingOpen,
+    stepIndex,
+    next,
+    back,
+    close,
+    reset,
+  } = useOnboarding(user?.id);
+
+   const onboardingTargetEl =
+   stepIndex === 2 ? menuBtnRef.current :
+   stepIndex === 3 ? addBtnRef.current :
+   null;
+
+
+  async function openDetail(row) {
   const id = row?.id;
   if (!id) return;
 
@@ -387,9 +413,9 @@ async function openDetail(row) {
 
   function emptyText() {
     if (section === "standbys" && standbysSubtab === "owed")
-      return "No one owes you a shift currently.";
+      return "No one owes you a shift ☹️";
     if (section === "standbys" && standbysSubtab === "owe")
-      return "You don't owe anyone a shift currently.";
+      return "You don't owe any shifts 🎉";
     if (section === "upcoming" && upcomingSubtab === "i_work")
       return "No upcoming shift commitments 🎉";
     if (section === "upcoming" && upcomingSubtab === "they_work")
@@ -398,6 +424,29 @@ async function openDetail(row) {
       return "Settled shifts will appear here.";
     return "Deleted shifts will appear here.";
   }
+
+function upcomingRowSentence(s) {
+  // Only override for future rows in Upcoming that are already linked/settled as a pair
+  if (section === "upcoming" && s?.settled && s?.settlement_group_id && isFuture(s?.shift_date)) {
+    const first = firstName(s?.person_name);
+    const date = formatDisplayDate(s?.shift_date);
+    const dutyPlatoon = formatPlatoonLabel(s?.duty_platoon || s?.platoon);
+    const st = shiftTypeShort(s);
+    const stPart = st ? ` ${st}` : "";
+
+    // worked_for_me === true => they will work for you (repayment shift)
+    if (s.worked_for_me) {
+      return `Once ${first} works for you on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
+    }
+
+    // worked_for_me === false => you will work for them
+    return `Once you work for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
+  }
+
+  // Default behaviour everywhere else (and for non-settled future shifts)
+  return rowSentence(s);
+}
+
 
   function statusText(s) {
     if (s.deleted_at) return "Deleted";
@@ -457,18 +506,36 @@ async function openDetail(row) {
         if (isSettlingShift) {
           const alreadyHappened = !isFuture(row.shift_date);
 
+        // Obligation shift (the earlier one in the settled pair):
+        // Show plain factual wording, with NO "owe/owed" sentence.
+        if (!isSettlingShift) {
+          if (row.worked_for_me) {
+            return `${who} worked for you on ${date} - ${dutyPlatoon}${stPart}.`;
+          }
+          return `You worked for ${who} on ${date} - ${dutyPlatoon}${stPart}.`;
+        }
+
           if (row.worked_for_me) {
             return alreadyHappened
-              ? `After ${first} worked for you on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
-              : `Once ${first} works for you on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
+           ? `Now that ${first} has worked for you on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
+           : `Once ${first} works for you on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
           }
 
-          return alreadyHappened
-            ? `After you worked for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
-            : `Once you work for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
-        }
+            return alreadyHappened
+           ? `Now that you have worked for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts are settled.`
+           : `Once you work for ${first} on ${date} - ${dutyPlatoon}${stPart}, your shifts will be settled.`;
+          }
       }
     }
+    // ✅ Guard: any row that is already settled should NEVER show "owe/owed" wording in list preview.
+    // (Even if we can't find its partner row at render time.)
+    if (row?.settled && row?.settlement_group_id) {
+      if (row.worked_for_me) {
+        return `${who} worked for you on ${date} - ${dutyPlatoon}${stPart}.`;
+      }
+      return `You worked for ${who} on ${date} - ${dutyPlatoon}${stPart}.`;
+    }
+
 
     // worked_for_me === true  => they worked for you (you owe them)
     // worked_for_me === false => you worked for them (they owe you)
@@ -827,6 +894,53 @@ async function openDetail(row) {
   // -----------------------------
   // Delete / restore
   // -----------------------------
+  async function deleteSettlementGroup(groupId) {
+  if (!groupId) return;
+
+  const ok = window.confirm("Delete this settled pair? This will move both shifts to History → Deleted.");
+  if (!ok) return;
+
+  const nowIso = new Date().toISOString();
+
+  const { error } = await supabase
+    .from("standby_events")
+    .update({ deleted_at: nowIso })
+    .eq("settlement_group_id", groupId)
+    .is("deleted_at", null);
+
+  if (error) {
+    console.error("Delete settlement group error:", error);
+    alert("Could not delete the pair. Check console.");
+    return;
+  }
+
+  setSelectedStandby(null);
+  setRefreshTick((t) => t + 1);
+}
+
+async function restoreSettlementGroup(groupId) {
+  if (!groupId) return;
+
+  const ok = window.confirm("Restore this deleted pair?");
+  if (!ok) return;
+
+  const { error } = await supabase
+    .from("standby_events")
+    .update({ deleted_at: null })
+    .eq("settlement_group_id", groupId)
+    .not("deleted_at", "is", null);
+
+  if (error) {
+    console.error("Restore settlement group error:", error);
+    alert("Could not restore the pair. Check console.");
+    return;
+  }
+
+  setSelectedStandby(null);
+  setRefreshTick((t) => t + 1);
+}
+
+  
   async function deleteStandby(id) {
     if (!id) return;
 
@@ -956,6 +1070,53 @@ async function openDetail(row) {
     e.preventDefault();
     if (!user?.id) return;
 
+  // If settling with existing and names mismatch flow is active, apply notes as needed
+  if (form.settle_existing && form.settle_with_existing_id && mismatchResolution) {
+    const existingId = form.settle_with_existing_id;
+
+    // helper to append a note to an existing standby row
+    async function appendNoteToStandby(id, noteToAdd) {
+      if (!noteToAdd) return;
+
+      // get current notes
+      const { data: row, error: readErr } = await supabase
+        .from("standby_events")
+        .select("notes")
+        .eq("id", id)
+        .single();
+      if (readErr) throw readErr;
+
+      const current = (row?.notes || "").trim();
+      const merged = current
+        ? `${current}\n${noteToAdd}`.trim()
+        : noteToAdd.trim();
+
+      const { error: updErr } = await supabase
+        .from("standby_events")
+        .update({ notes: merged })
+        .eq("id", id);
+      if (updErr) throw updErr;
+    }
+
+    if (mismatchResolution === "three_way") {
+      const stamp = `[Three-way standby]`;
+      // append to BOTH: the existing standby and the new one (after insert we also do it—see next section)
+      await appendNoteToStandby(existingId, stamp);
+      // for the NEW shift: store a pending note we’ll apply after insert
+      pendingNewShiftNoteRef.current = stamp;
+    }
+
+    if (mismatchResolution === "other") {
+      const text = (otherReasonNote || "").trim();
+      const stamp = text ? `[Name mismatch: ${text}]` : `[Name mismatch: Other reason]`;
+      await appendNoteToStandby(existingId, stamp);
+      pendingNewShiftNoteRef.current = stamp;
+    }
+
+    // typo => do nothing
+  }
+
+
     const payload = {
       user_id: user.id,
       person_name: toTitleCase(form.person_name),
@@ -981,6 +1142,26 @@ async function openDetail(row) {
       .insert([payload])
       .select("*")
       .single();
+
+    if (pendingNewShiftNoteRef.current) {
+  await (async () => {
+    const noteToAdd = pendingNewShiftNoteRef.current;
+    pendingNewShiftNoteRef.current = "";
+
+    const current = (inserted?.notes || "").trim();
+    const merged = current
+      ? `${current}\n${noteToAdd}`.trim()
+      : noteToAdd.trim();
+
+    const { error: updErr } = await supabase
+      .from("standby_events")
+      .update({ notes: merged })
+      .eq("id", inserted.id);
+
+    if (updErr) throw updErr;
+  })();
+}
+
 
     if (error) {
       console.error("Insert error:", error);
@@ -1151,7 +1332,7 @@ async function openDetail(row) {
   // History grouping (settled only)
   // -----------------------------
   const historyGroups = useMemo(() => {
-    if (!(section === "history" && historySubtab === "settled")) return [];
+    if (!(section === "history" && (historySubtab === "settled" || historySubtab === "deleted"))) return [];
 
     const rows = [...standbys];
     const groupsMap = new Map();
@@ -1225,15 +1406,20 @@ const renderSettleFlow = () => {
   if (selectedStandby.deleted_at) return null;
   if (selectedStandby.settled) return null;
 
-  // your existing settle UI block goes here
-  // (paste the renderSettleFlow() body you already have)
 };
+
+function listRowSentence(row) {
+  // Upcoming has a special override for future settled pairs
+  if (section === "upcoming") return upcomingRowSentence(row);
+  return rowSentence(row);
+}
 
 
   function renderList() {
     if (loading) return <p className="text-slate-500">Loading…</p>;
 
-    if (section === "history" && historySubtab === "settled") {
+    // History grouped (settled + deleted)
+      if (section === "history" && (historySubtab === "settled" || historySubtab === "deleted")) {
       const groups = historyGroups;
       const count = standbys.length;
 
@@ -1258,24 +1444,28 @@ const renderSettleFlow = () => {
                 <div key={g.gid} className="rounded-md border border-slate-200 bg-white overflow-hidden">
                   {!g.isSingle && (
                     <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
-                      <div className="text-xs font-semibold text-slate-500">Settled together</div>
+                      <div className="text-xs font-semibold text-slate-500">
+                        {historySubtab === "settled" ? "Settled together" : "Deleted together"}
+                      </div>
+
+                    {historySubtab === "deleted" && (
                       <button
-                        onClick={() => unsettleGroup(g.gid)}
+                        onClick={() => restoreSettlementGroup(g.gid)}
                         className="text-xs font-semibold text-slate-700 hover:text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-600 transition"
                         type="button"
-                        title="Unsettle"
+                        title="Restore pair"
                       >
-                        Unsettle ↩︎
+                        Restore pair ↩︎
                       </button>
+                    )}
                     </div>
                   )}
-
                   <div className="divide-y divide-slate-200">
                     {g.rows.map((s) => (
                       <ListRowCompact
                         key={s.id}
                         s={s}
-                        rowSentence={rowSentence}
+                        rowSentence={listRowSentence}
                         onToggleSelect={(row) =>
                           openStandbyDetailById({
                             id: row?.id,
@@ -1318,7 +1508,7 @@ const renderSettleFlow = () => {
               <ListRowCompact
                 key={s.id}
                 s={s}
-                rowSentence={rowSentence}
+                rowSentence={listRowSentence}
                 onToggleSelect={(row) => openDetail(row)}
               />
             ))}
@@ -1352,13 +1542,12 @@ const renderSettleFlow = () => {
     return (
       <div>
         <div className="mb-3">
-          <div className="text-lg font-extrabold text-slate-900">Settings</div>
-          <div className="text-sm text-slate-600 mt-1">Account + app info</div>
+          <div className="text-xl font-extrabold text-slate-900">Settings</div>
         </div>
 
         <div className="space-y-3">
           <div className="rounded-md border border-slate-200 bg-white p-4">
-            <div className="text-sm font-extrabold text-slate-900">Account</div>
+            <div className="text-md font-extrabold text-slate-900">Account</div>
 
             <div className="mt-2 text-sm text-slate-700">
               <div className="text-xs font-semibold text-slate-500">Email</div>
@@ -1387,7 +1576,7 @@ const renderSettleFlow = () => {
               <button
                 type="button"
                 onClick={sendPasswordReset}
-                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
               >
                 Change password
               </button>
@@ -1395,23 +1584,48 @@ const renderSettleFlow = () => {
               <button
                 type="button"
                 onClick={handleSignOut}
-                className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
               >
                 Sign out
               </button>
             </div>
           </div>
 
+          {/* Help */}
           <div className="rounded-md border border-slate-200 bg-white p-4">
-            <div className="text-sm font-extrabold text-slate-900">About</div>
+            <div className="text-md font-extrabold text-slate-900">Help</div>
+            <div className="mt-3 space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                    reset();                 // resets localStorage + opens step 1
+                }}
+                className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+              >
+                Re-run app tour
+              </button>
+
+              <button
+                type="button"
+                onClick={() => alert("User guide PDF coming soon (placeholder).")}
+                className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+              >
+                User guide (coming soon)
+              </button>
+            </div>
+          </div>
+
+
+          <div className="rounded-md border border-slate-200 bg-white p-4">
+            <div className="text-md font-extrabold text-slate-900">About</div>
 
             <div className="mt-3">
               <button
                 type="button"
                 onClick={sendFeedbackEmail}
-                className="rounded-md bg-slate-900 text-white px-3 py-2 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition shadow-sm"
+                className="w-full rounded-md bg-slate-900 text-white px-3 py-2 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition shadow-sm"
               >
-                Send app feedback to Cam
+                Send app feedback
               </button>
             </div>
 
@@ -1448,6 +1662,12 @@ const renderSettleFlow = () => {
                 </div>
               </div>
             </div>
+          </div>
+          <div className="pt-3 border-t border-slate-100 text-xs text-slate-500 space-y-1">
+            <div>
+              Developed by <span className="font-semibold text-slate-700">Cameron Reyniers [BETA]</span>
+            </div>
+            <div>© {new Date().getFullYear()} Cameron Reyniers. All rights reserved.</div>
           </div>
         </div>
       </div>
@@ -1494,9 +1714,10 @@ const renderSettleFlow = () => {
       <div className="sticky top-0 z-20 bg-white border-b border-slate-100">
         <div className="mx-auto max-w-xl px-4 py-3 flex items-center justify-between gap-2">
           <button
+            ref={menuBtnRef}
             type="button"
             onClick={() => setDrawerOpen(true)}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-m font-bold hover:bg-slate-50 active:scale-[0.99] transition"
             aria-label="Open menu"
           >
             ☰
@@ -1505,11 +1726,12 @@ const renderSettleFlow = () => {
           <div className="text-2xl font-bold text-slate-900 tracking-tight truncate">{sectionTitle()}</div>
 
           <button
+            ref={addBtnRef}
             type="button"
             onClick={() => openAddStandbyModal()}
-            className="rounded-md bg-slate-900 text-white px-3 py-2 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
+            className="rounded-md bg-slate-900 text-white px-3 py-2 text-m font-bold hover:bg-slate-800 active:scale-[0.99] transition"
           >
-            + Add Standby
+             + 
           </button>
         </div>
       </div>
@@ -1551,6 +1773,7 @@ const renderSettleFlow = () => {
             setShowAddModal(false);
             setOppositeCandidates([]);
             setMismatchResolution("");
+            pendingNewShiftNoteRef.current = "";
           }}
         >
           <form onSubmit={submitAddShift} className="space-y-4">
@@ -1679,10 +1902,20 @@ const renderSettleFlow = () => {
               <div className="flex gap-2">
                 <button
                   type="submit"
-                  className="flex-1 rounded-md bg-slate-900 text-white px-3 py-2.5 text-sm font-semibold hover:bg-slate-800 active:scale-[0.99] transition"
+                  disabled={
+                    loading ||
+                    (form.settle_existing && !mismatchResolution) // must pick one option
+                  }
+                  className={`flex-1 rounded-md px-3 py-2.5 text-sm font-semibold transition active:scale-[0.99]
+                    ${
+                      loading || (form.settle_existing && !mismatchResolution)
+                        ? "bg-slate-300 text-white cursor-not-allowed"
+                        : "bg-slate-900 text-white hover:bg-slate-800"
+                    }`}
                 >
-                  Add
+                  {loading ? "Working…" : "Add"}
                 </button>
+
 
                 <button
                   type="button"
@@ -1707,11 +1940,16 @@ const renderSettleFlow = () => {
           {!isEditing ? (
             <div className="space-y-4">
               <div className="rounded-md border border-slate-200 bg-white p-4">
-                <div className="mt-2 text-sm text-slate-700 leading-relaxed">
-                  {detailNarrative(selectedStandby, findPartnerShift)}
+                <div className="mt-2 text-md text-slate-700"> {(() => {
+                    try {
+                      return detailNarrative?.(selectedStandby, findPartnerShift) || "";
+                    } catch (e) {
+                      console.error("detailNarrative crashed:", e);
+                      return "Could not render this standby detail. Check console.";
+                    }
+                  })()}
                 </div>
                 <div className="mt-3 flex items-center justify-between">
-                  <div className="text-xs font-semibold text-slate-500">Status</div>
                   <StatusPill text={statusText(selectedStandby)} />
                 </div>
               </div>
@@ -1825,6 +2063,16 @@ const renderSettleFlow = () => {
                   Edit
                 </button>
 
+                {selectedStandby.settled && selectedStandby.settlement_group_id && !selectedStandby.deleted_at && (
+                  <button
+                    onClick={() => unsettleGroup(selectedStandby.settlement_group_id)}
+                    className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                    type="button"
+                  >
+                    Unsettle pair
+                  </button>
+                )}
+
                 {!selectedStandby.settled && !selectedStandby.deleted_at && (
                   <button
                     onClick={() => {
@@ -1842,14 +2090,27 @@ const renderSettleFlow = () => {
                 )}
 
                 {!selectedStandby.deleted_at && (
-                  <button
-                    onClick={() => deleteStandby(selectedStandby.id)}
-                    className="rounded-md bg-rose-600 text-white px-3 py-2.5 text-sm font-semibold hover:bg-rose-700 active:scale-[0.99] transition"
-                    type="button"
-                  >
-                    Delete
-                  </button>
-                )}
+                    <>
+                      {selectedStandby.settled && selectedStandby.settlement_group_id ? (
+                        <button
+                          onClick={() => deleteSettlementGroup(selectedStandby.settlement_group_id)}
+                          className="rounded-md bg-rose-600 text-white px-3 py-2.5 text-sm font-semibold hover:bg-rose-700 active:scale-[0.99] transition"
+                          type="button"
+                        >
+                          Delete pair
+                        </button>
+                      ) : null}
+
+                      <button
+                        onClick={() => deleteStandby(selectedStandby.id)}
+                        className="rounded-md border border-rose-200 bg-white text-rose-700 px-3 py-2.5 text-sm font-semibold hover:bg-rose-50 active:scale-[0.99] transition"
+                        type="button"
+                      >
+                        Delete shift
+                      </button>
+                    </>
+                  )}
+
               </div>
             ) : (
               <div className="flex gap-2">
@@ -1884,6 +2145,21 @@ const renderSettleFlow = () => {
           {!isEditing && renderSettleFlow()}
         </ModalShell>
       )}
+
+            {/* Onboarding / Tour */}
+      <OnboardingModal
+        open={onboardingOpen}
+        stepIndex={stepIndex}
+        targetEl={onboardingTargetEl}
+        onNext={() => {
+          const isLast = stepIndex === STEPS.length - 1;
+          if (isLast) close();
+          else next(STEPS.length);
+        }}
+        onBack={back}
+        onClose={close}
+      />
+
     </div>
   );
 }
@@ -1907,8 +2183,32 @@ function AddSettleExistingBlock({
   setMismatchResolution,
   getNameMismatchInfo,
 }) {
+  // Local UI state (must be INSIDE component)
+  const [showOtherReasonPrompt, setShowOtherReasonPrompt] = useState(false);
+  const [otherReasonNote, setOtherReasonNote] = useState("");
+
   const other = oppositeCandidates.find((x) => x.id === form.settle_with_existing_id);
   const mismatch = other ? getNameMismatchInfo(form.person_name, other.person_name).mismatch : false;
+
+  // Keep the "Other reason" prompt synced if parent mismatchResolution changes
+  useEffect(() => {
+    if (mismatchResolution !== "other") {
+      setShowOtherReasonPrompt(false);
+      setOtherReasonNote("");
+    } else {
+      setShowOtherReasonPrompt(true);
+    }
+  }, [mismatchResolution]);
+
+  // If you need the note later when you submit, store it on the form so the parent can access it
+  useEffect(() => {
+    if (mismatchResolution === "other") {
+      setForm((f) => ({ ...f, pending_other_reason_note: otherReasonNote }));
+    } else {
+      setForm((f) => ({ ...f, pending_other_reason_note: "" }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otherReasonNote, mismatchResolution]);
 
   return (
     <div className="rounded-md border border-slate-200 bg-white p-4 space-y-3">
@@ -1923,7 +2223,7 @@ function AddSettleExistingBlock({
           value={form.settle_with_existing_id || ""}
           onChange={(e) => {
             setForm((f) => ({ ...f, settle_with_existing_id: e.target.value || null }));
-            setMismatchResolution("");
+            setMismatchResolution(""); // reset choice when they pick a different shift
           }}
           className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
         >
@@ -1941,13 +2241,35 @@ function AddSettleExistingBlock({
         <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           <div className="font-semibold">Names don’t match</div>
           <div className="mt-1">
-            Could be a typo, or a <span className="font-semibold">three way standby</span>.
+            Is it a <span className="font-semibold">typo</span>, a{" "}
+            <span className="font-semibold">three way standby</span>, or another reason?
           </div>
 
           <div className="mt-2 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => setMismatchResolution("threeway")}
+              onClick={() => {
+                setMismatchResolution("typo");
+                setShowOtherReasonPrompt(false);
+                setOtherReasonNote("");
+              }}
+              className={[
+                "rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
+                mismatchResolution === "typo"
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white border-amber-200 text-amber-900",
+              ].join(" ")}
+            >
+              Typo (same person)
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMismatchResolution("threeway");
+                setShowOtherReasonPrompt(false);
+                setOtherReasonNote("");
+              }}
               className={[
                 "rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
                 mismatchResolution === "threeway"
@@ -1960,20 +2282,39 @@ function AddSettleExistingBlock({
 
             <button
               type="button"
-              onClick={() => setMismatchResolution("same")}
+              onClick={() => {
+                setMismatchResolution("other");
+                setShowOtherReasonPrompt(true);
+              }}
               className={[
                 "rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
-                mismatchResolution === "same"
+                mismatchResolution === "other"
                   ? "bg-slate-900 text-white border-slate-900"
                   : "bg-white border-amber-200 text-amber-900",
               ].join(" ")}
             >
-              It’s the same person
+              Other reason
             </button>
           </div>
 
           {mismatchResolution === "threeway" && (
             <div className="mt-2 text-xs text-amber-800">Adds “Three way standby” note to both shifts.</div>
+          )}
+
+          {showOtherReasonPrompt && mismatchResolution === "other" && (
+            <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+              <div className="text-sm font-semibold text-slate-900">Optional note</div>
+              <div className="text-xs text-slate-600 mt-1">
+                Add a quick note for why these names don’t match (optional).
+              </div>
+
+              <textarea
+                value={otherReasonNote}
+                onChange={(e) => setOtherReasonNote(e.target.value)}
+                className="mt-2 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm"
+                rows={3}
+              />
+            </div>
           )}
         </div>
       )}
@@ -2127,8 +2468,16 @@ function ModalShell({ title, subtitle, children, onClose }) {
         if (e.target === e.currentTarget) requestClose();
       }}
     >
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-
+      <button
+        type="button"
+        aria-label="Close modal"
+        className="absolute inset-0 bg-black/30 backdrop-blur-sm cursor-default"
+        onMouseDown={(e) => {
+          e.preventDefault(); // prevents focus weirdness
+          requestClose();
+        }}
+      />
+      
       <div
         className={[
           "relative w-full max-w-xl max-h-[90vh] flex flex-col rounded-md bg-white shadow-xl border border-slate-200",

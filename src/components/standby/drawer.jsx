@@ -45,6 +45,9 @@ export default function Drawer({
           <div className="text-[24pt] font-extrabold text-slate-900 leading-tight">
             Shift IOU
           </div>
+          <div className="text-[16pt] font-light text-slate-400 leading-tight">
+             [BETA]
+          </div>
 
           {email ? (
             <div className="mt-1 text-s text-bold text-slate-600 truncate">{email}</div>
@@ -57,23 +60,28 @@ export default function Drawer({
               Overall standby position:
             </div>
 
-            <div className="flex gap-3 text-sm font-semibold">
-              <button
+            <button
                 type="button"
                 onClick={onGoOwed}
-                className="text-emerald-700 text-[20pt] hover:underline active:scale-[0.98] transition" >
-                +{overallPlus}
+                className={[
+                  "text-xl font-extrabold hover:underline active:scale-[0.98] transition",
+                  overallPlus > 0 ? "text-emerald-600" : "text-slate-400",
+                ].join(" ")}
+              >
+                + {overallPlus}
               </button>
-            <div className="text-[20pt] text-black leading-tight">
-            /
-            </div>
+              <span className="text-slate-400 mx-2 text-2xl font-bold select-none">/</span>
               <button
                 type="button"
                 onClick={onGoOwe}
-                className="text-rose-700 text-[20pt] hover:underline active:scale-[0.98] transition">
-                -{overallMinus}
+                className={[
+                  "text-xl font-extrabold hover:underline active:scale-[0.98] transition",
+                  overallMinus > 0 ? "text-rose-600" : "text-slate-400",
+                ].join(" ")}
+              >
+                - {overallMinus}
               </button>
-            </div>
+
           </div>
         </div>
 
@@ -87,7 +95,7 @@ export default function Drawer({
                   setDrawerOpen(false);
                   onAddStandby?.();
                 }}
-                className="rounded-md bg-slate-900 text-white px-3 py-2 text-s font-medium hover:bg-slate-800 active:scale-[0.99] transition"
+                className="mt-4 w-full rounded-md bg-slate-900 text-white px-3 py-2 text-s font-medium hover:bg-slate-800 active:scale-[0.99] transition"
                 title="Add standby"
               >
                 + Add Standby
@@ -184,7 +192,7 @@ function DrawerButton({ label, active, onClick }) {
     <button
       onClick={onClick}
       className={[
-        "w-full text-left px-3 py-2 rounded-md text-sm font-semibold transition",
+        "w-full text-left px-3 py-2 rounded-md text-base font-medium transition",
         active
           ? "bg-slate-100 text-slate-900"
           : "text-slate-700 hover:bg-slate-50",
@@ -201,7 +209,7 @@ function GroupButton({ label, active, onClick }) {
     <button
       onClick={onClick}
       className={[
-        "w-full text-left px-3 py-2 rounded-md text-sm font-extrabold transition",
+        "w-full text-left px-3 py-1.5 rounded-md text-base font-bold transition leading-tight",
         active
           ? "bg-slate-50 text-slate-900"
           : "text-slate-800 hover:bg-slate-50",

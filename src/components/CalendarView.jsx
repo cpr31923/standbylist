@@ -56,6 +56,16 @@ function platoonLetterClass(letter) {
   return "text-slate-400";
 }
 
+function rosterPillClass(letter) {
+  const L = clampPlatoonLetter(letter);
+  if (L === "A") return "bg-sky-100 text-sky-800 border-sky-200";
+  if (L === "B") return "bg-slate-200 text-slate-900 border-slate-300";
+  if (L === "C") return "bg-emerald-100 text-emerald-800 border-emerald-200";
+  if (L === "D") return "bg-rose-100 text-rose-800 border-rose-200";
+  return "bg-slate-100 text-slate-500 border-slate-200";
+}
+
+
 function dayNightPillClass(kind) {
   // kind: "DAY" | "NIGHT"
   if (kind === "DAY") return "bg-rose-100 text-rose-800 border-rose-200";
@@ -242,50 +252,58 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
         </div>
       )}
 
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-lg font-extrabold text-slate-900 truncate">{monthLabel(cursorMonth)}</div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Month/Year picker (reliable: user taps the input, native picker opens) */}
-          <input
-            type="month"
-            value={toMonthValue(cursorMonth)}
-            onChange={(e) => {
-              const next = fromMonthValue(e.target.value);
-              if (next) setCursorMonth(next);
-            }}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-          />
-
-          <button
-            type="button"
-            onClick={goToday}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-          >
-            Today
-          </button>
-          <button
-            type="button"
-            onClick={goPrevMonth}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-            aria-label="Previous month"
-            title="Previous month"
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            onClick={goNextMonth}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-            aria-label="Next month"
-            title="Next month"
-          >
-            ›
-          </button>
-        </div>
+    <div className="mb-3 space-y-2">
+      <div className="text-2xl font-extrabold text-slate-900 text-center">
+        {monthLabel(cursorMonth)}
       </div>
+
+{mode === "mine" && home && (
+    <div className="mt-1 text-center text-xs text-slate-500">
+      Viewing {home} Platoon’s pattern
+    </div>
+)}
+{/* Second row: controls */}
+      <div className="flex items-center justify-center gap-2">
+        <input
+          type="month"
+          value={toMonthValue(cursorMonth)}
+          onChange={(e) => {
+            const next = fromMonthValue(e.target.value);
+            if (next) setCursorMonth(next);
+          }}
+          className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+        />
+
+        <button
+          type="button"
+          onClick={goToday}
+          className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+        >
+          Today
+        </button>
+
+        <button
+          type="button"
+          onClick={goPrevMonth}
+          className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+          aria-label="Previous month"
+          title="Previous month"
+        >
+          ‹
+        </button>
+
+        <button
+          type="button"
+          onClick={goNextMonth}
+          className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+          aria-label="Next month"
+          title="Next month"
+        >
+          ›
+        </button>
+      </div>
+    </div>
+
 
       {loading && <div className="text-sm text-slate-500 mb-2">Loading…</div>}
 
@@ -324,12 +342,27 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                     {dayNum(d)}
                   </div>
 
-                  <div className="mt-2 flex items-center justify-between px-1">
-                    <span className={["text-lg font-extrabold", platoonLetterClass(roster.day)].join(" ")}>
-                      {roster.day || ""}
+                  <div className="mt-2 flex items-center justify-between gap-2 px-1">
+                    <span
+                      className={[
+                        "inline-flex items-center justify-center w-10 h-8 rounded-full border text-base font-extrabold",
+                        rosterPillClass(roster.day),
+                        !roster.day ? "opacity-50" : "",
+                      ].join(" ")}
+                      title={roster.day ? `Day: ${roster.day} Platoon` : "Day: —"}
+                    >
+                      {roster.day || "—"}
                     </span>
-                    <span className={["text-lg font-extrabold", platoonLetterClass(roster.night)].join(" ")}>
-                      {roster.night || ""}
+
+                    <span
+                      className={[
+                        "inline-flex items-center justify-center w-10 h-8 rounded-full border text-base font-extrabold",
+                        rosterPillClass(roster.night),
+                        !roster.night ? "opacity-50" : "",
+                      ].join(" ")}
+                      title={roster.night ? `Night: ${roster.night} Platoon` : "Night: —"}
+                    >
+                      {roster.night || "—"}
                     </span>
                   </div>
                 </div>
@@ -362,20 +395,20 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                   onSelectStandby(clickableStandby);
                 }}
                 className={[
-                  "min-h-[110px] border-b border-slate-200 border-r border-slate-200 last:border-r-0",
-                  "p-2 text-left overflow-hidden",
+                 "min-h-[88px] border-b border-slate-200 border-r border-slate-200 last:border-r-0",
+                  "p-1.5 text-left overflow-hidden",
                   inMonth ? "bg-white" : "bg-slate-50",
                   today ? "ring-2 ring-slate-900 ring-inset" : "",
                   canClick ? "hover:bg-slate-50 active:scale-[0.995] transition" : "cursor-default",
                 ].join(" ")}
                 title={canClick ? "Tap to view standby" : undefined}
                 >
-                <div className={["text-base font-medium text-center", inMonth ? "text-slate-900" : "text-slate-400"].join(" ")}>
+                <div className={["text-[15px]] font-medium text-center leading-none", inMonth ? "text-slate-900" : "text-slate-400"].join(" ")}>
                   {dayNum(d)}
                 </div>
 
                 {/* fixed vertical lanes */}
-                <div className="relative mt-2 h-[92px]">
+                <div className="relative mt-1.5 h-[56px]">
                   {/* DAY lane */}
                   <div className="absolute left-0 right-0 top-0 flex justify-center">
                     {/* ✅ STACKED pills (fix) */}
@@ -383,9 +416,9 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                       {youHaveDay && (
                         <span
                           className={[
-                            "inline-flex items-center justify-center w-16 px-2 py-1 text-xs font-extrabold rounded-full border",
+                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[11px] font-extrabold rounded-full border leading-none",
                             dayNightPillClass("DAY"),
-                            dayHasSBYA ? "line-through opacity-60" : "",
+                            dayHasSBYA ? "line-through opacity-40" : "",
                           ].join(" ")}
                         >
                           Day
@@ -395,7 +428,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                       {dayStandby && (
                         <span
                           className={[
-                            "inline-flex items-center justify-center w-16 px-2 py-1 text-xs font-extrabold rounded-full border",
+                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[11px] font-extrabold rounded-full border leading-none",
                             standbyPillClass(dayStandby.worked_for_me ? "SBYA" : "SBY_DAY"),
                           ].join(" ")}
                         >
@@ -412,7 +445,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                       {youHaveNight && (
                         <span
                           className={[
-                            "inline-flex items-center justify-center w-16 px-2 py-1 text-xs font-extrabold rounded-full border",
+                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[11px] font-extrabold rounded-full border leading-none",
                             dayNightPillClass("NIGHT"),
                             nightHasSBYA ? "line-through opacity-60" : "",
                           ].join(" ")}
@@ -424,7 +457,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                       {nightStandby && (
                         <span
                           className={[
-                            "inline-flex items-center justify-center w-16 px-2 py-1 text-xs font-extrabold rounded-full border",
+                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[11px] font-extrabold rounded-full border leading-none",
                             standbyPillClass(nightStandby.worked_for_me ? "SBYA" : "SBY_NIGHT"),
                           ].join(" ")}
                         >

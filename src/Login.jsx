@@ -8,6 +8,8 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  const [homePlatoon, setHomePlatoon] = useState("");
+
   // Signup email-first flow
   const [signupStep, setSignupStep] = useState("email"); // email | details
   const [firstName, setFirstName] = useState("");
@@ -108,6 +110,7 @@ export default function Login() {
               first_name: firstName.trim(),
               last_name: lastName.trim(),
               full_name: `${firstName.trim()} ${lastName.trim()}`.trim(),
+              home_platoon: homePlatoon || null,
             },
           },
         });
@@ -138,6 +141,7 @@ export default function Login() {
 
   return (
     <div style={styles.wrap}>
+      <div style={styles.stack}>
       <div style={styles.card}>
         <h1 style={styles.title}>Shift IOU</h1>
 
@@ -197,25 +201,17 @@ export default function Login() {
                   style={styles.eyeBtn}
                 >
                   {showPassword ? "Hide" : "Show"}
-                </button>
+                </button>                
               </div>
             </label>
           )}
 
           {mode === "reset" && (
             <div style={styles.helpBlock}>
-              Enter your email and we’ll send a password reset link.
-              <div style={{ height: 10 }} />
-              <button
-                type="button"
-                style={styles.secondaryBtn}
-                onClick={() => sendReset(cleanEmail)}
-                disabled={loading}
-              >
-                {loading ? "Working…" : "Send reset email"}
-              </button>
+              Enter your email and we’ll send you a password reset link.
             </div>
           )}
+
 
           {mode === "signup" && (
             <>
@@ -249,44 +245,65 @@ export default function Login() {
                   </div>
 
                   <label style={styles.label}>
-                    Create password
-                    <div style={styles.passwordRow}>
-                      <input
-                        style={{ ...styles.input, ...styles.passwordInput }}
-                        type={showPassword ? "text" : "password"}
-                        autoComplete="new-password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Create a password"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword((v) => !v)}
-                        style={styles.eyeBtn}
+                      Create password
+                      <div style={styles.passwordRow}>
+                        <input
+                          style={{ ...styles.input, ...styles.passwordInput }}
+                          type={showPassword ? "text" : "password"}
+                          autoComplete="new-password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="Create a password"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((v) => !v)}
+                          style={styles.eyeBtn}
+                        >
+                          {showPassword ? "Hide" : "Show"}
+                        </button>
+                      </div>
+                    </label>
+
+                    <label style={styles.label}>
+                      Home platoon (optional)
+                      <select
+                        style={styles.select}
+                        value={homePlatoon}
+                        onChange={(e) => setHomePlatoon(e.target.value)}
                       >
-                        {showPassword ? "Hide" : "Show"}
-                      </button>
-                    </div>
-                  </label>
+                        <option value="">Skip for now</option>
+                        <option value="A">A Platoon</option>
+                        <option value="B">B Platoon</option>
+                        <option value="C">C Platoon</option>
+                        <option value="D">D Platoon</option>
+                      </select>
+                    </label>
                 </>
               )}
             </>
           )}
 
-          {err && <div style={styles.err}>{err}</div>}
-          {msg && <div style={styles.msg}>{msg}</div>}
+         {err && <div style={styles.err}>{err}</div>}
+         {msg && <div style={styles.msg}>{msg}</div>}
 
-          {mode !== "reset" && (
-            <button type="submit" style={styles.btn} disabled={loading}>
-              {loading
-                ? "Working…"
-                : mode === "signin"
-                ? "Sign in"
-                : signupStep === "email"
-                ? "Continue"
-                : "Create account"}
-            </button>
+          {mode === "signup" && signupStep === "details" && (
+            <div style={styles.help}>
+              By creating an account, you agree to the app’s terms and privacy policy (see Settings → About).
+            </div>
           )}
+
+          <button type="submit" style={styles.btn} disabled={loading}>
+            {loading
+              ? "Working…"
+              : mode === "signin"
+              ? "Sign in"
+              : mode === "reset"
+              ? "Send reset email"
+              : signupStep === "email"
+              ? "Continue"
+              : "Create account"}
+          </button>
 
           {mode === "signup" && signupStep === "details" && (
             <button
@@ -300,14 +317,28 @@ export default function Login() {
           )}
         </form>
 
-        {/* Tip only when register tab selected */}
+        {mode === "signin" && (
+          <p style={styles.help}>
+            Tip: If you don't have an account, use <b>Create Account</b>. If you’ve forgotten your password, use{" "}
+            <b>Forgot password</b>.
+          </p>
+        )}
         {mode === "signup" && (
           <p style={styles.help}>
             Tip: If you already have an account, use <b>Sign in</b>. If you’ve forgotten your password, use{" "}
             <b>Forgot password</b>.
           </p>
         )}
+        {mode === "reset" && (
+          <p style={styles.help}>
+            Tip: If you already have an account, use <b>Sign in</b>. If you don't have an account, use <b>Create Account</b>.
+          </p>
+        )}
       </div>
+        <div style={{ ...styles.help, textAlign: "center", marginTop: 12 }}>
+          <b>© {new Date().getFullYear()} Shift IOU </b> [BETA]
+        </div>
+    </div>
     </div>
   );
 }
@@ -384,6 +415,17 @@ const styles = {
     fontSize: 14,
     whiteSpace: "nowrap",
   },
+
+  select: {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #ddd",
+    fontSize: 16,
+    width: "100%",
+    boxSizing: "border-box",
+    background: "white",
+  },
+
 
   btn: {
     marginTop: 4,
