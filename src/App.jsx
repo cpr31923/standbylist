@@ -31,7 +31,24 @@ export default function App() {
     };
   }, []);
 
-  if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
+  if (loading) {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#f5f5f7",
+      }}
+    >
+      <div style={{ color: "#666", fontSize: 14 }}>
+        Getting things ready…
+      </div>
+    </div>
+  );
+}
+
 
   return (
     <div style={{ overflowX: "hidden" }}>

@@ -7,6 +7,10 @@ import "./index.css";
 // Ensure no horizontal scroll app-wide (mobile + desktop)
 document.body.classList.add("app-no-x-scroll");
 
+import { initTheme } from "./theme";
+
+initTheme();
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <App />

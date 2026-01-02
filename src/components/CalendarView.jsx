@@ -311,7 +311,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
         {/* Weekday header */}
         <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
           {weekdayLabels.map((w) => (
-            <div key={w} className="px-2 py-2 text-[11px] font-extrabold text-slate-600 uppercase tracking-wide">
+            <div key={w} className="py-2 text-[11px] font-extrabold text-slate-600 uppercase text-center">
               {w}
             </div>
           ))}
@@ -333,19 +333,18 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                   key={key}
                   className={[
                     "min-h-[92px] border-b border-slate-200 border-r border-slate-200 last:border-r-0",
-                    "p-2 overflow-hidden",
                     inMonth ? "bg-white" : "bg-slate-50",
                     today ? "ring-2 ring-slate-900 ring-inset" : "",
                   ].join(" ")}
                 >
-                  <div className={["text-base font-medium text-center", inMonth ? "text-slate-900" : "text-slate-400"].join(" ")}>
+                  <div className={["text-xl font-bold text-center", inMonth ? "text-slate-900" : "text-slate-400"].join(" ")}>
                     {dayNum(d)}
                   </div>
 
                   <div className="mt-2 flex items-center justify-between gap-2 px-1">
                     <span
                       className={[
-                        "inline-flex items-center justify-center w-10 h-8 rounded-full border text-base font-extrabold",
+                        "inline-flex items-center justify-center w-10 h-8 rounded-full border text-sm font-medium",
                         rosterPillClass(roster.day),
                         !roster.day ? "opacity-50" : "",
                       ].join(" ")}
@@ -356,7 +355,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
 
                     <span
                       className={[
-                        "inline-flex items-center justify-center w-10 h-8 rounded-full border text-base font-extrabold",
+                        "inline-flex items-center justify-center w-10 h-8 rounded-full border text-sm font-medium",
                         rosterPillClass(roster.night),
                         !roster.night ? "opacity-50" : "",
                       ].join(" ")}

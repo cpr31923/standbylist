@@ -4,7 +4,8 @@ import { supabase } from "../supabaseClient";
 import CalendarView from "./CalendarView";
 import { fetchStandbyById } from "./standby/data";
 import OnboardingModal, { STEPS } from "./OnboardingModal";
-import useOnboarding from "../hooks/useOnboarding";
+import { useOnboarding } from "../hooks/useOnboarding";
+
 
 import {
   todayYMD,
@@ -82,6 +83,8 @@ export default function StandbyList() {
   // Filters UI
   const [filtersOpen, setFiltersOpen] = useState(false);
 
+
+
   const [standbys, setStandbys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(null);
@@ -109,6 +112,42 @@ export default function StandbyList() {
   const [showOtherReasonPrompt, setShowOtherReasonPrompt] = useState(false);
   const [otherReasonNote, setOtherReasonNote] = useState("");
 
+  const [bundleOptions, setBundleOptions] = useState([]); // [{bundle_id, bundle_label, count}]
+
+  async function fetchBundleOptions() {
+  if (!user?.id) return;
+
+  // Pull recent bundles from this user’s rows (future + settled etc)
+  const { data, error } = await supabase
+    .from("standby_events")
+    .select("bundle_id, bundle_label")
+    .eq("user_id", user.id)
+    .not("bundle_id", "is", null)
+    .is("deleted_at", null)
+    .order("shift_date", { ascending: false })
+    .limit(300);
+
+  if (error) {
+    console.warn("Could not load bundle options:", error);
+    return;
+  }
+
+  // De-dupe
+  const map = new Map();
+  for (const r of data || []) {
+    const id = r.bundle_id;
+    if (!id) continue;
+    if (!map.has(id)) map.set(id, { bundle_id: id, bundle_label: r.bundle_label || "Shift run" });
+  }
+  setBundleOptions(Array.from(map.values()));
+}
+
+useEffect(() => {
+  if (!showAddModal) return;
+  fetchBundleOptions();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [showAddModal, user?.id]);
+
 
   // Add form
   const [form, setForm] = useState({
@@ -121,9 +160,33 @@ export default function StandbyList() {
     notes: "",
     settle_existing: false,
     settle_with_existing_id: null,
+    name_tbc: false,
+    bundle_enabled: false,
+    bundle_mode: "new",
+    bundle_id: null,
+    bundle_label: "",
   });
 
-  // Prevent auto-fill fighting the user
+  // TBC is only allowed when: future-dated AND "They will work for me"
+  const canUseTBC = useMemo(() => {
+  return form.worked_for_me === true && isFuture(form.shift_date);
+    }, [form.worked_for_me, form.shift_date]);
+
+useEffect(() => {
+  // If TBC is on but conditions no longer allow it, turn it off safely
+  if (!form.name_tbc) return;
+  if (canUseTBC) return;
+
+  setForm((f) => ({
+    ...f,
+    name_tbc: false,
+    person_name: f.person_name === "TBC" ? "" : f.person_name,
+  }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [canUseTBC]);
+
+
+    // Prevent auto-fill fighting the user
   const dutyPlatoonManualRef = useRef(false);
   const pendingNewShiftNoteRef = useRef("");
 
@@ -152,6 +215,26 @@ export default function StandbyList() {
     close,
     reset,
   } = useOnboarding(user?.id);
+
+  useEffect(() => {
+  if (!user?.id) return;
+
+  // open tour only once per user, the first time they sign in
+  const key = `shift-iou:onboarding:${user.id}`;
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const done = Boolean(parsed?.done);
+
+    if (!done && !parsed) {
+      // never seen before
+      setOnboardingOpen(true);
+    }
+  } catch {
+    setOnboardingOpen(true);
+  }
+}, [user?.id, setOnboardingOpen]);
+
 
    const onboardingTargetEl =
    stepIndex === 2 ? menuBtnRef.current :
@@ -1032,17 +1115,28 @@ async function restoreSettlementGroup(groupId) {
     dutyPlatoonManualRef.current = false;
     const defaultWorkedForMe = defaults.worked_for_me ?? false;
 
-    setForm({
-      worked_for_me: defaultWorkedForMe,
-      person_name: defaults.person_name ?? "",
-      platoon: defaults.platoon ?? "",
-      shift_date: defaults.shift_date ?? "",
-      shift_type: defaults.shift_type ?? "Day",
-      duty_platoon: "",
-      notes: "",
-      settle_existing: false,
-      settle_with_existing_id: null,
-    });
+    setForm((prev) => ({
+  ...prev,
+  worked_for_me: defaultWorkedForMe,
+  person_name: defaults.person_name ?? "",
+  platoon: defaults.platoon ?? "",
+  shift_date: defaults.shift_date ?? "",
+  shift_type: defaults.shift_type ?? "Day",
+  duty_platoon: "",
+  notes: "",
+  settle_existing: false,
+  settle_with_existing_id: null,
+
+  // Reset TBC safely
+  name_tbc: false,
+
+  // Keep bundle settings as-is by default, but you can decide to reset these if you prefer:
+  // bundle_enabled: false,
+  // bundle_mode: "new",
+  // bundle_id: null,
+  // bundle_label: "",
+}));
+
 
     setMismatchResolution("");
     setFiltersOpen(false);
@@ -1116,7 +1210,6 @@ async function restoreSettlementGroup(groupId) {
     // typo => do nothing
   }
 
-
     const payload = {
       user_id: user.id,
       person_name: toTitleCase(form.person_name),
@@ -1131,9 +1224,32 @@ async function restoreSettlementGroup(groupId) {
       settlement_group_id: null,
       settlement_status: null,
       deleted_at: null,
+      bundle_id: null,
+      bundle_label: null,
     };
 
+    // ✅ Bundle assignment
+      if (form.bundle_enabled) {
+        if (form.bundle_mode === "existing") {
+          payload.bundle_id = form.bundle_id || null;
+          payload.bundle_label = String(form.bundle_label || "").trim() || null;
+        } else {
+          // new bundle
+          const id = form.bundle_id || makeUUID();
+          const label = String(form.bundle_label || "").trim() || "Shift run";
+          payload.bundle_id = id;
+          payload.bundle_label = label;
+
+          // keep it for the next add (optional convenience)
+          setForm((f) => ({ ...f, bundle_id: id, bundle_label: label }));
+        }
+      }
+
+
     if (!payload.person_name) return alert("Please enter a name.");
+    if (payload.person_name === "TBC" && !canUseTBC) {
+      return alert("TBC is only allowed for future shifts where they will work for you.");
+    }
     if (!payload.shift_date) return alert("Please select a date.");
     if (!payload.shift_type) return alert("Please select Day or Night.");
 
@@ -1320,6 +1436,67 @@ async function restoreSettlementGroup(groupId) {
     return rows;
   }, [standbys, searchText, platoonFilter, sortMode]);
 
+const upcomingItems = useMemo(() => {
+  if (section !== "upcoming") return [];
+
+  const rows = [...viewRows];
+
+  // group rows by bundle_id
+  const bundles = new Map();
+  const singles = [];
+
+  for (const r of rows) {
+    const bid = r?.bundle_id || null;
+    if (bid) {
+      if (!bundles.has(bid)) {
+        bundles.set(bid, {
+          type: "bundle",
+          bundle_id: bid,
+          bundle_label: r?.bundle_label || "Shift group",
+          rows: [],
+        });
+      }
+      bundles.get(bid).rows.push(r);
+    } else {
+      singles.push({ type: "single", row: r });
+    }
+  }
+
+  // choose a sort key for each bundle = earliest date in bundle
+  const bundleItems = Array.from(bundles.values()).map((g) => {
+    const sortedRows = [...g.rows].sort((a, b) => {
+      const A = String(a.shift_date || "");
+      const B = String(b.shift_date || "");
+
+      // match overall list sort
+      if (sortMode === "date_desc") return B.localeCompare(A);
+      return A.localeCompare(B); // date_asc default
+    });
+
+    const keyDate = sortedRows[0]?.shift_date || "";
+    return { ...g, rows: sortedRows, keyDate };
+  });
+
+  // singles sort key = their date
+  const singleItems = singles.map((x) => ({
+    ...x,
+    keyDate: x.row?.shift_date || "",
+  }));
+
+  const items = [...bundleItems, ...singleItems];
+
+  // sort based on your current sortMode
+  items.sort((a, b) => {
+    const A = String(a.keyDate || "");
+    const B = String(b.keyDate || "");
+    if (sortMode === "date_desc") return B.localeCompare(A);
+    return A.localeCompare(B); // date_asc default for Upcoming
+  });
+
+  return items;
+}, [section, viewRows, sortMode]);
+
+
   const activeFilterCount = useMemo(() => {
     let n = 0;
     if (String(searchText || "").trim()) n++;
@@ -1331,8 +1508,43 @@ async function restoreSettlementGroup(groupId) {
   // -----------------------------
   // History grouping (settled only)
   // -----------------------------
+    
+  const historyBundleGroups = useMemo(() => {
+  if (!(section === "history" && historySubtab === "settled")) return null;
+
+  const rows = [...standbys];
+  const bundles = new Map();
+  const singles = [];
+
+  for (const r of rows) {
+    if (r.bundle_id) {
+      if (!bundles.has(r.bundle_id)) {
+        bundles.set(r.bundle_id, { bundle_id: r.bundle_id, bundle_label: r.bundle_label || "Shift run", rows: [] });
+      }
+      bundles.get(r.bundle_id).rows.push(r);
+    } else {
+      singles.push(r);
+    }
+  }
+
+  const bundleArr = Array.from(bundles.values()).map((g) => ({
+    ...g,
+    rows: g.rows.sort((a, b) => String(b.shift_date || "").localeCompare(String(a.shift_date || ""))),
+  }));
+
+  bundleArr.sort((a, b) => {
+    const ad = a.rows[0]?.shift_date || "";
+    const bd = b.rows[0]?.shift_date || "";
+    return String(bd).localeCompare(String(ad));
+  });
+
+  return { bundleArr, singles };
+}, [section, historySubtab, standbys]);
+
+  
   const historyGroups = useMemo(() => {
     if (!(section === "history" && (historySubtab === "settled" || historySubtab === "deleted"))) return [];
+
 
     const rows = [...standbys];
     const groupsMap = new Map();
@@ -1416,75 +1628,134 @@ function listRowSentence(row) {
 
 
   function renderList() {
-    if (loading) return <p className="text-slate-500">Loading…</p>;
+    if (loading) return <div className="p-4 text-center">Getting there...</div>;
 
-    // History grouped (settled + deleted)
-      if (section === "history" && (historySubtab === "settled" || historySubtab === "deleted")) {
-      const groups = historyGroups;
-      const count = standbys.length;
+if (section === "upcoming") {
+  const count = viewRows.length;
 
-      return (
-        <div>
-          <div className="mb-3 flex items-end justify-between gap-3">
-            <div>
-              <div className="text-lg font-extrabold text-slate-900">{listTitle()}</div>
-              <div className="text-sm text-slate-600 mt-1 font-semibold">
-                {totalLabel()} <span className="text-slate-900">{count}</span>
-              </div>
-            </div>
-          </div>
+  return (
+    <div>
+      <div className="mb-3">
+        <div className="text-lg font-extrabold text-slate-900">{listTitle()}</div>
+        <div className="text-sm text-slate-600 mt-1 font-semibold">
+          {totalLabel()} <span className="text-slate-900">{count}</span>
+        </div>
+      </div>
 
-          {renderFiltersBar()}
+      {renderFiltersBar()}
 
-          {groups.length === 0 ? (
-            <EmptyState tabLabel={emptyText()} />
-          ) : (
-            <div className="space-y-3">
-              {groups.map((g) => (
-                <div key={g.gid} className="rounded-md border border-slate-200 bg-white overflow-hidden">
-                  {!g.isSingle && (
-                    <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
-                      <div className="text-xs font-semibold text-slate-500">
-                        {historySubtab === "settled" ? "Settled together" : "Deleted together"}
-                      </div>
-
-                    {historySubtab === "deleted" && (
-                      <button
-                        onClick={() => restoreSettlementGroup(g.gid)}
-                        className="text-xs font-semibold text-slate-700 hover:text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-600 transition"
-                        type="button"
-                        title="Restore pair"
-                      >
-                        Restore pair ↩︎
-                      </button>
-                    )}
+      {upcomingItems.length === 0 ? (
+        <EmptyState tabLabel={emptyText()} />
+      ) : (
+        <div className="space-y-4">
+          {upcomingItems.map((it) => {
+            if (it.type === "bundle") {
+              return (
+                <div
+                  key={it.bundle_id}
+                  className="rounded-md border-2 border-slate-200 bg-white overflow-hidden"
+                >
+                  <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
+                    <div className="text-xs font-semibold text-slate-500">
+                      {it.bundle_label || "Shift group"}
                     </div>
-                  )}
+                  </div>
+
                   <div className="divide-y divide-slate-200">
-                    {g.rows.map((s) => (
+                    {it.rows.map((s) => (
                       <ListRowCompact
                         key={s.id}
                         s={s}
                         rowSentence={listRowSentence}
-                        onToggleSelect={(row) =>
-                          openStandbyDetailById({
-                            id: row?.id,
-                            resetOverlays,
-                            setDrawerOpen,
-                            setSelectedStandby,
-                          })
-                        }
-
+                        onToggleSelect={(row) => openDetail(row)}
                       />
                     ))}
                   </div>
                 </div>
+              );
+            }
+
+            // single
+            return (
+              <div
+                key={it.row.id}
+                className="rounded-md border border-slate-200 bg-white overflow-hidden"
+              >
+                <ListRowCompact
+                  s={it.row}
+                  rowSentence={listRowSentence}
+                  onToggleSelect={(row) => openDetail(row)}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
+
+    // History grouped (settled + deleted)
+      if (section === "history" && historySubtab === "settled" && historyBundleGroups) {
+  const { bundleArr, singles } = historyBundleGroups;
+
+  return (
+    <div>
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <div>
+          <div className="text-lg font-extrabold text-slate-900">{listTitle()}</div>
+          <div className="text-sm text-slate-600 mt-1 font-semibold">
+            {totalLabel()} <span className="text-slate-900">{standbys.length}</span>
+          </div>
+        </div>
+      </div>
+
+      {renderFiltersBar()}
+
+      {standbys.length === 0 ? (
+        <EmptyState tabLabel={emptyText()} />
+      ) : (
+        <div className="space-y-3">
+          {bundleArr.map((g) => (
+            <div key={g.bundle_id} className="rounded-md border border-slate-200 bg-white overflow-hidden">
+              <div className="px-3 py-2 border-b border-slate-200">
+                <div className="text-sm font-extrabold text-slate-900">{g.bundle_label || "Shift run"}</div>
+                <div className="text-xs text-slate-500">{g.rows.length} shifts</div>
+              </div>
+              <div className="divide-y divide-slate-200">
+                {g.rows.map((s) => (
+                  <ListRowCompact
+                    key={s.id}
+                    s={s}
+                    rowSentence={listRowSentence}
+                    onToggleSelect={(row) => openDetail(row)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {singles.length > 0 && (
+            <div className="rounded-md border border-slate-200 bg-white overflow-hidden divide-y divide-slate-200">
+              {singles.map((s) => (
+                <ListRowCompact
+                  key={s.id}
+                  s={s}
+                  rowSentence={listRowSentence}
+                  onToggleSelect={(row) => openDetail(row)}
+                />
               ))}
             </div>
           )}
         </div>
-      );
-    }
+      )}
+    </div>
+  );
+}
+
 
     const rows = viewRows;
     const count = rows.length;
@@ -1554,13 +1825,13 @@ function listRowSentence(row) {
               <div className="mt-0.5 font-semibold">{email}</div>
             </div>
 
+
             <div className="mt-4 text-sm text-slate-700">
               <div className="text-xs font-semibold text-slate-500">Home platoon</div>
               <select
                 value={homePlatoon || ""}
                 onChange={(e) => saveHomePlatoon(e.target.value)}
-                className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold"
-              >
+                className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold">
                 <option value="">— Select —</option>
                 <option value="A">A Platoon</option>
                 <option value="B">B Platoon</option>
@@ -1632,7 +1903,7 @@ function listRowSentence(row) {
             <div className="mt-3 text-sm text-slate-700 leading-relaxed space-y-3">
               <p>
                 This app started as a personal side project. I built it because I was frustrated that there wasn’t an easy way
-                to track standby commitments, after trying spreadsheets, Notes apps, and old-fashioned pen and paper with limited
+                to track standby commitments, after trying spreadsheets with formulas, Notes apps, and old-fashioned pen and paper with limited
                 success.
               </p>
 
@@ -1689,7 +1960,7 @@ function listRowSentence(row) {
   const drawerEmail = session?.user?.email || user?.email || "";
 
   return (
-    <div className="min-h-screen bg-white overflow-x-hidden">
+    <div className="min-h-screen bg-white overflow-x-hidden flex flex-col">
       <Drawer
         drawerOpen={drawerOpen}
         setDrawerOpen={setDrawerOpen}
@@ -1710,60 +1981,70 @@ function listRowSentence(row) {
         onGoOwe={() => goStandbys("owe")}
       />
 
-      {/* Top bar */}
-      <div className="sticky top-0 z-20 bg-white border-b border-slate-100">
-        <div className="mx-auto max-w-xl px-4 py-3 flex items-center justify-between gap-2">
-          <button
-            ref={menuBtnRef}
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-m font-bold hover:bg-slate-50 active:scale-[0.99] transition"
-            aria-label="Open menu"
-          >
-            ☰
-          </button>
+      {/* App shell: makes content area scroll instead of the page */}
+      <div className="min-h-screen h-screen bg-white overflow-x-hidden flex flex-col">
+        {/* Top bar (stays fixed) */}
+        <div className="sticky top-0 z-30 bg-white border-b border-slate-100">
+          <div className="mx-auto max-w-xl px-4 py-3 flex items-center justify-between gap-2">
+            <button
+              ref={menuBtnRef}
+              type="button"
+              onClick={() => setDrawerOpen(true)}
+              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-m font-bold hover:bg-slate-50 active:scale-[0.99] transition"
+              aria-label="Open menu"
+            >
+              ☰
+            </button>
 
-          <div className="text-2xl font-bold text-slate-900 tracking-tight truncate">{sectionTitle()}</div>
+            <div className="text-2xl font-bold text-slate-900 tracking-tight truncate">
+              {sectionTitle()}
+            </div>
 
-          <button
-            ref={addBtnRef}
-            type="button"
-            onClick={() => openAddStandbyModal()}
-            className="rounded-md bg-slate-900 text-white px-3 py-2 text-m font-bold hover:bg-slate-800 active:scale-[0.99] transition"
-          >
-             + 
-          </button>
+            <button
+              ref={addBtnRef}
+              type="button"
+              onClick={() => openAddStandbyModal()}
+              className="rounded-md bg-slate-900 text-white px-3 py-2 text-m font-bold hover:bg-slate-800 active:scale-[0.99] transition"
+              aria-label="Add standby"
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        {/* Content scroll area (only this scrolls) */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-xl w-full px-4 pt-4 pb-10">
+            {fetchError && (
+              <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm">
+                <span className="font-bold">Fetch error:</span> {fetchError}
+              </div>
+            )}
+
+            {section === "settings" ? (
+              renderSettings()
+            ) : section === "calendar" ? (
+              <CalendarView
+                userId={user?.id}
+                mode={calendarSubtab === "mine" ? "mine" : "shift"}
+                homePlatoon={homePlatoon}
+                onGoSettings={() => goSettings()}
+                onSelectStandby={(row) =>
+                  openStandbyDetailById({
+                    id: row?.id,
+                    resetOverlays,
+                    setDrawerOpen,
+                    setSelectedStandby,
+                  })
+                }
+              />
+            ) : (
+              renderList()
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="mx-auto max-w-xl px-4 pt-4 pb-10">
-        {fetchError && (
-          <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm">
-            <span className="font-bold">Fetch error:</span> {fetchError}
-          </div>
-        )}
-
-        {section === "settings" ? (
-          renderSettings()
-        ) : section === "calendar" ? (
-          <CalendarView
-            userId={user?.id}
-            mode={calendarSubtab === "mine" ? "mine" : "shift"}
-            homePlatoon={homePlatoon}
-            onGoSettings={() => goSettings()}
-            onSelectStandby={(row) =>
-              openStandbyDetailById({
-                id: row?.id,
-                resetOverlays,
-                setDrawerOpen,
-                setSelectedStandby,
-              })
-            }
-          />
-        ) : (
-          renderList()
-        )}
-      </div>
 
       {/* Add Modal */}
       {showAddModal && (
@@ -1821,7 +2102,16 @@ function listRowSentence(row) {
                     type="radio"
                     name="worked_for_me"
                     checked={form.worked_for_me === false}
-                    onChange={() => setForm((f) => ({ ...f, worked_for_me: false, settle_with_existing_id: null }))}
+                    onChange={() =>
+                      setForm((f) => ({
+                        ...f,
+                        worked_for_me: false,
+                        name_tbc: false,
+                        person_name: f.name_tbc ? "" : f.person_name,
+                        settle_with_existing_id: null,
+                      }))
+                    }
+
                     className="mt-1"
                   />
                   <div className="font-semibold">
@@ -1844,22 +2134,80 @@ function listRowSentence(row) {
               </div>
             </div>
 
-            <div>
-              <label className="text-sm font-semibold text-slate-700">Name</label>
-              <input
-                list="nameSuggestions"
-                value={form.person_name}
-                onChange={(e) => setForm((f) => ({ ...f, person_name: toTitleCaseLive(e.target.value) }))}
-                onBlur={() => setForm((f) => ({ ...f, person_name: toTitleCase(f.person_name) }))}
-                placeholder="Start typing…"
-                className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
-              />
-              <datalist id="nameSuggestions">
-                {nameSuggestions.map((n) => (
-                  <option key={n} value={n} />
-                ))}
-              </datalist>
-            </div>
+            {/* Name (TBC only for "They will work for me") */}
+            {form.worked_for_me === true ? (
+              <div className="space-y-3">
+                {canUseTBC && (
+                  <label className="flex items-start gap-3 text-sm text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.name_tbc)}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setForm((f) => ({
+                        ...f,
+                        name_tbc: checked,
+                        person_name: checked ? "TBC" : "",
+                      }));
+                    }}
+                    className="mt-1"
+                  />
+                  <div>
+                    <div className="font-semibold">Name not known yet</div>
+                    <div className="text-xs text-slate-500">You can assign it later.</div>
+                  </div>
+                </label>
+                )}
+
+
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">Name</label>
+                  <input
+                    list="nameSuggestions"
+                    value={form.person_name}
+                    disabled={Boolean(form.name_tbc)}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, person_name: toTitleCaseLive(e.target.value) }))
+                    }
+                    onBlur={() =>
+                      setForm((f) => ({ ...f, person_name: toTitleCase(f.person_name) }))
+                    }
+                    placeholder={form.name_tbc ? "To be confirmed" : "Start typing…"}
+                    className={
+                      "mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2" +
+                      (form.name_tbc ? " opacity-60" : "")
+                    }
+                  />
+                  <datalist id="nameSuggestions">
+                    {nameSuggestions.map((n) => (
+                      <option key={n} value={n} />
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className="text-sm font-semibold text-slate-700">Name</label>
+                <input
+                  list="nameSuggestions"
+                  value={form.person_name}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, person_name: toTitleCaseLive(e.target.value) }))
+                  }
+                  onBlur={() =>
+                    setForm((f) => ({ ...f, person_name: toTitleCase(f.person_name) }))
+                  }
+                  placeholder="Start typing…"
+                  className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
+                />
+                <datalist id="nameSuggestions">
+                  {nameSuggestions.map((n) => (
+                    <option key={n} value={n} />
+                  ))}
+                </datalist>
+              </div>
+            )}
+
 
             <InputField
               label="What platoon is this person on?"
@@ -1873,6 +2221,102 @@ function listRowSentence(row) {
               value={form.notes}
               onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
             />
+
+            <div className="rounded-md border border-slate-200 bg-white p-4 space-y-3">
+              <div className="text-sm font-extrabold text-slate-900">Group shifts (optional)</div>
+              <label className="flex items-start gap-3 text-sm text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.bundle_enabled)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+
+                    setForm((f) => ({
+                      ...f,
+                      bundle_enabled: checked,
+                      // sensible defaults when enabling
+                      bundle_mode: checked ? (f.bundle_mode || "new") : "new",
+                      // clear fields if disabling
+                      bundle_id: checked ? f.bundle_id : null,
+                      bundle_label: checked ? f.bundle_label : "",
+                    }));
+                  }}
+                  className="mt-1"
+                />
+                <div>
+                  <div className="font-semibold">Group this shift with others</div>
+                  <div className="text-xs text-slate-500">
+                    Useful for consecutive shifts off covered by different people.
+                  </div>
+                </div>
+              </label>
+
+              {form.bundle_enabled && (
+                <div className="space-y-3">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, bundle_mode: "new", bundle_id: null }))}
+                      className={[
+                        "flex-1 rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
+                        form.bundle_mode === "new"
+                          ? "bg-slate-900 text-white border-slate-900"
+                          : "bg-white border-slate-200 text-slate-900",
+                      ].join(" ")}
+                    >
+                      New group
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, bundle_mode: "existing" }))}
+                      className={[
+                        "flex-1 rounded-md px-3 py-2 text-sm font-semibold border transition active:scale-[0.99]",
+                        form.bundle_mode === "existing"
+                          ? "bg-slate-900 text-white border-slate-900"
+                          : "bg-white border-slate-200 text-slate-900",
+                      ].join(" ")}
+                    >
+                      Existing
+                    </button>
+                  </div>
+
+                  {form.bundle_mode === "new" ? (
+                    <InputField
+                      label="Group label"
+                      placeholder='e.g. "3 shifts off", "Jan leave cover"'
+                      value={form.bundle_label}
+                      onChange={(v) => setForm((f) => ({ ...f, bundle_label: v }))}
+                    />
+                  ) : (
+                    <div>
+                      <label className="text-sm font-semibold text-slate-700">Choose a group</label>
+                      <select
+                        value={form.bundle_id || ""}
+                        onChange={(e) => {
+                          const id = e.target.value || null;
+                          const found = bundleOptions.find((b) => b.bundle_id === id);
+                          setForm((f) => ({
+                            ...f,
+                            bundle_id: id,
+                            bundle_label: found?.bundle_label || f.bundle_label,
+                          }));
+                        }}
+                        className="mt-1 w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2"
+                      >
+                        <option value="">— Select —</option>
+                        {bundleOptions.map((b) => (
+                          <option key={b.bundle_id} value={b.bundle_id}>
+                            {b.bundle_label || "Shift run"}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
 
             <label className="flex items-start gap-3 text-sm text-slate-800">
               <input
@@ -1934,7 +2378,6 @@ function listRowSentence(row) {
         </ModalShell>
       )}
 
-      {/* Detail Modal */}
       {selectedStandby && (
         <ModalShell title={toTitleCase(selectedStandby.person_name)} onClose={resetOverlays}>
           {!isEditing ? (
@@ -2044,29 +2487,29 @@ function listRowSentence(row) {
 
           <div className="mt-5 border-t border-slate-100 pt-4">
             {section === "history" && historySubtab === "deleted" ? (
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2">
                 <button
                   onClick={() => restoreStandby(selectedStandby.id)}
                   className="flex-1 rounded-md bg-emerald-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 active:scale-[0.99] transition"
                   type="button"
                 >
-                  Restore
+                  Restore shift
                 </button>
               </div>
             ) : !isEditing ? (
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => setIsEditing(true)}
-                  className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                  className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                   type="button"
                 >
-                  Edit
+                  Edit shift
                 </button>
 
                 {selectedStandby.settled && selectedStandby.settlement_group_id && !selectedStandby.deleted_at && (
                   <button
                     onClick={() => unsettleGroup(selectedStandby.settlement_group_id)}
-                    className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                    className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                     type="button"
                   >
                     Unsettle pair
@@ -2082,19 +2525,19 @@ function listRowSentence(row) {
                       setOppositeCandidates([]);
                       setMismatchResolution("");
                     }}
-                    className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+                    className="w-full rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2.5 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
                     type="button"
                   >
-                    Settle
+                    Settle shift
                   </button>
                 )}
-
+<div> </div>
                 {!selectedStandby.deleted_at && (
                     <>
                       {selectedStandby.settled && selectedStandby.settlement_group_id ? (
                         <button
                           onClick={() => deleteSettlementGroup(selectedStandby.settlement_group_id)}
-                          className="rounded-md bg-rose-600 text-white px-3 py-2.5 text-sm font-semibold hover:bg-rose-700 active:scale-[0.99] transition"
+                          className="w-full rounded-md bg-rose-600 text-white px-3 py-2.5 text-sm font-semibold hover:bg-rose-700 active:scale-[0.99] transition"
                           type="button"
                         >
                           Delete pair
@@ -2103,7 +2546,7 @@ function listRowSentence(row) {
 
                       <button
                         onClick={() => deleteStandby(selectedStandby.id)}
-                        className="rounded-md border border-rose-200 bg-white text-rose-700 px-3 py-2.5 text-sm font-semibold hover:bg-rose-50 active:scale-[0.99] transition"
+                        className="w-full rounded-md border border-rose-200 bg-white text-rose-700 px-3 py-2.5 text-sm font-semibold hover:bg-rose-50 active:scale-[0.99] transition"
                         type="button"
                       >
                         Delete shift
@@ -2145,7 +2588,7 @@ function listRowSentence(row) {
           {!isEditing && renderSettleFlow()}
         </ModalShell>
       )}
-
+    
             {/* Onboarding / Tour */}
       <OnboardingModal
         open={onboardingOpen}
@@ -2417,9 +2860,13 @@ function NewShiftMiniForm({ selectedStandby, onBack, onCreate, userId }) {
                 settlement_group_id: null,
                 settlement_status: null,
                 deleted_at: null,
+                bundle_id: selectedStandby.bundle_id || null,
+                bundle_label: selectedStandby.bundle_label || null,
+
               };
 
-              if (!payload.person_name) return alert("Please enter a name.");
+              const pn = String(payload.person_name || "").trim();
+              if (!pn) return alert("Please enter a name (or tick ‘Name not known yet’).");
               if (!payload.shift_date) return alert("Please select a date.");
               if (!payload.shift_type) return alert("Please select Day or Night.");
 

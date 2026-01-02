@@ -168,12 +168,12 @@ export default function Drawer({
           {drawerGroup === "calendar" && (
             <div className="ml-2 border-l border-slate-100 pl-3 space-y-1">
               <DrawerButton
-                label="Shift calendar"
-                onClick={() => goCalendar("shift")}
-              />
-              <DrawerButton
                 label="My calendar"
                 onClick={() => goCalendar("mine")}
+              />
+              <DrawerButton
+                label="Shift calendar"
+                onClick={() => goCalendar("shift")}
               />
             </div>
           )}

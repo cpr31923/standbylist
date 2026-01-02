@@ -1,45 +1,108 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-export default function useOnboarding(userId) {
+/**
+ * Onboarding state is per-user (localStorage).
+ * We NEVER early-return before hooks (Rules of Hooks).
+ */
+export function useOnboarding(userId) {
   const storageKey = useMemo(() => {
-    const id = userId || "anon";
-    return `shift-iou:onboardingSeen:${id}`;
+    const id = String(userId || "").trim();
+    return id ? `shift-iou:onboarding:${id}` : `shift-iou:onboarding:anon`;
   }, [userId]);
 
+  // Stored shape: { done: boolean, open: boolean, stepIndex: number, lastSeenAt?: string }
   const [open, setOpen] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
 
+  // Load saved state when storageKey changes (i.e., user logs in/out)
   useEffect(() => {
     try {
-      const seen = localStorage.getItem(storageKey) === "true";
-      if (!seen) setOpen(true);
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) {
+        // default: not open; index 0
+        setOpen(false);
+        setStepIndex(0);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      setOpen(Boolean(parsed?.open));
+      setStepIndex(Number.isFinite(parsed?.stepIndex) ? parsed.stepIndex : 0);
     } catch {
-      setOpen(true);
+      setOpen(false);
+      setStepIndex(0);
     }
   }, [storageKey]);
 
-  function close() {
-    setOpen(false);
+  // Persist whenever it changes
+  useEffect(() => {
     try {
-      localStorage.setItem(storageKey, "true");
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          open,
+          stepIndex,
+          done: false, // "done" is set by close()
+          lastSeenAt: new Date().toISOString(),
+        })
+      );
     } catch {}
-  }
+  }, [open, stepIndex, storageKey]);
 
-  function reset() {
+  const close = useCallback(() => {
+    setOpen(false);
+    setStepIndex(0);
     try {
-      localStorage.setItem(storageKey, "false");
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : {};
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          ...parsed,
+          open: false,
+          stepIndex: 0,
+          done: true,
+          completedAt: new Date().toISOString(),
+        })
+      );
     } catch {}
+  }, [storageKey]);
+
+  const reset = useCallback(() => {
+    // Force tour to re-run from step 0
     setStepIndex(0);
     setOpen(true);
-  }
+    try {
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          open: true,
+          stepIndex: 0,
+          done: false,
+          lastSeenAt: new Date().toISOString(),
+        })
+      );
+    } catch {}
+  }, [storageKey]);
 
-  function next(totalSteps) {
-    setStepIndex((i) => Math.min(i + 1, totalSteps - 1));
-  }
+  const next = useCallback((stepsLength) => {
+    setStepIndex((i) => {
+      const n = Number.isFinite(stepsLength) ? stepsLength : 0;
+      if (n <= 0) return i + 1;
+      return Math.min(i + 1, n - 1);
+    });
+  }, []);
 
-  function back() {
-    setStepIndex((i) => Math.max(i - 1, 0));
-  }
+  const back = useCallback(() => {
+    setStepIndex((i) => Math.max(0, i - 1));
+  }, []);
 
-  return { open, setOpen, stepIndex, next, back, close, reset };
+  return {
+    open,
+    setOpen,
+    stepIndex,
+    next,
+    back,
+    close,
+    reset,
+  };
 }
