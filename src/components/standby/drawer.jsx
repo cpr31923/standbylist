@@ -36,13 +36,13 @@ export default function Drawer({
       <aside
         className={[
           "fixed inset-y-0 left-0 z-40 w-80 bg-white border-r border-slate-200",
-          "h-[100dvh] max-h-[100dvh] overflow-y-auto",
+          "h-[100dvh] max-h-[100dvh] flex flex-col",
           "transform transition-transform duration-200",
           drawerOpen ? "translate-x-0" : "-translate-x-full",
         ].join(" ")}
       >
         {/* Header */}
-        <div className="px-4 py-4 border-b border-slate-200">
+        <div className="px-4 py-4 border-b border-slate-200 shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -99,7 +99,7 @@ export default function Drawer({
 
         {/* Menu */}
         
-        <nav className="p-3 space-y-2">
+        <nav className="p-3 space-y-2 overflow-y-auto">
 
             <button
                 type="button"
