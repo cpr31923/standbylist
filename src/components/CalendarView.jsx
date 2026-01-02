@@ -415,7 +415,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                       {youHaveDay && (
                         <span
                           className={[
-                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[11px] font-extrabold rounded-full border leading-none",
+                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[9px] font-semibold rounded-full border leading-none",
                             dayNightPillClass("DAY"),
                             dayHasSBYA ? "line-through opacity-40" : "",
                           ].join(" ")}
@@ -427,7 +427,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                       {dayStandby && (
                         <span
                           className={[
-                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[11px] font-extrabold rounded-full border leading-none",
+                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[9px] font-semibold rounded-full border leading-none",
                             standbyPillClass(dayStandby.worked_for_me ? "SBYA" : "SBY_DAY"),
                           ].join(" ")}
                         >
@@ -444,7 +444,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                       {youHaveNight && (
                         <span
                           className={[
-                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[11px] font-extrabold rounded-full border leading-none",
+                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[9px] font-semibold rounded-full border leading-none",
                             dayNightPillClass("NIGHT"),
                             nightHasSBYA ? "line-through opacity-60" : "",
                           ].join(" ")}
@@ -456,7 +456,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                       {nightStandby && (
                         <span
                           className={[
-                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[11px] font-extrabold rounded-full border leading-none",
+                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[9px] font-semibold rounded-full border leading-none",
                             standbyPillClass(nightStandby.worked_for_me ? "SBYA" : "SBY_NIGHT"),
                           ].join(" ")}
                         >
