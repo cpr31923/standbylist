@@ -35,7 +35,8 @@ export default function Drawer({
 
       <aside
         className={[
-          "fixed top-0 left-0 z-50 h-full w-80 bg-white border-r border-slate-200",
+          "fixed inset-y-0 left-0 z-40 w-80 bg-white border-r border-slate-200",
+          "h-[100dvh] max-h-[100dvh] overflow-y-auto",
           "transform transition-transform duration-200",
           drawerOpen ? "translate-x-0" : "-translate-x-full",
         ].join(" ")}
