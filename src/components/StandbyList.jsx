@@ -1908,8 +1908,8 @@ if (section === "upcoming") {
               </p>
 
               <p>
-                It’s designed as a simple, private tool to help individuals keep track of their own arrangements. It is not an
-                official system of record and should not be relied on as your only source of truth for anything important.
+                Shift IOU is designed as a simple, private tool to help individuals keep track of their own standby arrangements. It is not an
+                official system of record and should not be relied on as your only source of truth.
               </p>
 
               <p>This app is not affiliated with, endorsed by, or connected to DFES or any other organisation.</p>
@@ -1921,7 +1921,7 @@ if (section === "upcoming") {
               </p>
 
               <p>
-                By using this app you accept that it is provided “as-is”, and that no responsibility is taken for any data loss,
+                By using this app you accept that it is provided “as-is”, and that no responsibility is taken for data loss,
                 errors, or consequences arising from its use.
               </p>
 
@@ -1939,6 +1939,8 @@ if (section === "upcoming") {
               Developed by <span className="font-semibold text-slate-700">Cameron Reyniers [BETA]</span>
             </div>
             <div>© {new Date().getFullYear()} Cameron Reyniers. All rights reserved.</div>
+            <br></br>
+            <br></br>
           </div>
         </div>
       </div>
