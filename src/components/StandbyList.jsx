@@ -1022,6 +1022,31 @@ async function restoreSettlementGroup(groupId) {
   setSelectedStandby(null);
   setRefreshTick((t) => t + 1);
 }
+async function renameBundle(bundleId, currentLabel) {
+  if (!user?.id || !bundleId) return;
+
+  const next = window.prompt("Rename this group:", currentLabel || "Shift run");
+  if (next == null) return; // cancelled
+  const trimmed = String(next).trim();
+  if (!trimmed) return alert("Group name can’t be blank.");
+
+  const { error } = await supabase
+    .from("standby_events")
+    .update({ bundle_label: trimmed })
+    .eq("user_id", user.id)
+    .eq("bundle_id", bundleId)
+    .is("deleted_at", null);
+
+  if (error) {
+    console.error("Rename bundle error:", error);
+    alert("Could not rename group. Check console.");
+    return;
+  }
+
+  // keep the dropdown options fresh + re-render lists
+  fetchBundleOptions();
+  setRefreshTick((t) => t + 1);
+}
 
   
   async function deleteStandby(id) {
@@ -1655,11 +1680,25 @@ if (section === "upcoming") {
                   key={it.bundle_id}
                   className="rounded-md border-2 border-slate-200 bg-white overflow-hidden"
                 >
-                  <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
-                    <div className="text-xs font-semibold text-slate-500">
-                      {it.bundle_label || "Shift group"}
-                    </div>
-                  </div>
+                  <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => renameBundle(it.bundle_id, it.bundle_label)}
+                    className="text-xs font-semibold text-slate-700 hover:underline truncate"
+                    title="Rename group"
+                  >
+                    {it.bundle_label || "Shift group"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => renameBundle(it.bundle_id, it.bundle_label)}
+                    className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Rename
+                  </button>
+                </div>
+
 
                   <div className="divide-y divide-slate-200">
                     {it.rows.map((s) => (
@@ -1721,10 +1760,28 @@ if (section === "upcoming") {
         <div className="space-y-3">
           {bundleArr.map((g) => (
             <div key={g.bundle_id} className="rounded-md border border-slate-200 bg-white overflow-hidden">
-              <div className="px-3 py-2 border-b border-slate-200">
-                <div className="text-sm font-extrabold text-slate-900">{g.bundle_label || "Shift run"}</div>
+              <div className="px-3 py-2 border-b border-slate-200 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <button
+                  type="button"
+                  onClick={() => renameBundle(g.bundle_id, g.bundle_label)}
+                  className="text-sm font-extrabold text-slate-900 hover:underline truncate"
+                  title="Rename group"
+                >
+                  {g.bundle_label || "Shift run"}
+                </button>
                 <div className="text-xs text-slate-500">{g.rows.length} shifts</div>
               </div>
+
+              <button
+                type="button"
+                onClick={() => renameBundle(g.bundle_id, g.bundle_label)}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+              >
+                Rename
+              </button>
+            </div>
+
               <div className="divide-y divide-slate-200">
                 {g.rows.map((s) => (
                   <ListRowCompact
@@ -1739,15 +1796,22 @@ if (section === "upcoming") {
           ))}
 
           {singles.length > 0 && (
-            <div className="rounded-md border border-slate-200 bg-white overflow-hidden divide-y divide-slate-200">
-              {singles.map((s) => (
-                <ListRowCompact
-                  key={s.id}
-                  s={s}
-                  rowSentence={listRowSentence}
-                  onToggleSelect={(row) => openDetail(row)}
-                />
-              ))}
+            <div className="rounded-md border border-slate-200 bg-white overflow-hidden">
+              <div className="px-3 py-2 border-b border-slate-200">
+                <div className="text-sm font-extrabold text-slate-900">Settled</div>
+                <div className="text-xs text-slate-500">{singles.length} shifts</div>
+              </div>
+
+              <div className="divide-y divide-slate-200">
+                {singles.map((s) => (
+                  <ListRowCompact
+                    key={s.id}
+                    s={s}
+                    rowSentence={listRowSentence}
+                    onToggleSelect={(row) => openDetail(row)}
+                  />
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -1991,7 +2055,7 @@ if (section === "upcoming") {
             <button
               ref={menuBtnRef}
               type="button"
-              onClick={() => setDrawerOpen(true)}
+              onClick={() => setDrawerOpen((v) => !v)}
               className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-m font-bold hover:bg-slate-50 active:scale-[0.99] transition"
               aria-label="Open menu"
             >
@@ -1999,9 +2063,19 @@ if (section === "upcoming") {
             </button>
 
             <div className="text-2xl font-bold text-slate-900 tracking-tight truncate">
-              {sectionTitle()}
-            </div>
+                {sectionTitle()}
+              </div>
 
+        <div className="flex items-center gap-2">
+          <button
+              type="button"
+              onClick={() => setRefreshTick((t) => t + 1)}
+              className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-m font-bold hover:bg-slate-50 active:scale-[0.99] transition"
+              aria-label="Refresh"
+              title="Refresh"
+            >
+              ↻
+            </button>
             <button
               ref={addBtnRef}
               type="button"
@@ -2011,8 +2085,8 @@ if (section === "upcoming") {
             >
               +
             </button>
-          </div>
         </div>
+      </div>
 
         {/* Content scroll area (only this scrolls) */}
         <div className="flex-1 overflow-y-auto">
@@ -2046,6 +2120,7 @@ if (section === "upcoming") {
           </div>
         </div>
       </div>
+    </div>
 
 
       {/* Add Modal */}

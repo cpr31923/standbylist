@@ -28,23 +28,34 @@ export default function Drawer({
     <>
       {drawerOpen && (
         <div
-          className="fixed inset-0 z-30 bg-black/25"
-          onClick={() => setDrawerOpen(false)}
+          className="fixed inset-0 z-40 bg-black/25"
+          onClick={() => setDrawerOpen((v) => !v)}
         />
       )}
 
       <aside
         className={[
-          "fixed top-0 left-0 z-40 h-full w-80 bg-white border-r border-slate-200",
+          "fixed top-0 left-0 z-50 h-full w-80 bg-white border-r border-slate-200",
           "transform transition-transform duration-200",
           drawerOpen ? "translate-x-0" : "-translate-x-full",
         ].join(" ")}
       >
         {/* Header */}
         <div className="px-4 py-4 border-b border-slate-200">
-          <div className="text-[24pt] font-extrabold text-slate-900 leading-tight">
-            Shift IOU
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              goStandbys("owed");
+              setDrawerOpen(false);
+            }}
+            className="text-left"
+            aria-label="Go to home"
+            title="Home"
+          >
+            <div className="text-2xl font-extrabold text-slate-900 hover:underline">
+              Shift IOU
+            </div>
+          </button>
           <div className="text-[16pt] font-light text-slate-400 leading-tight">
              [BETA]
           </div>

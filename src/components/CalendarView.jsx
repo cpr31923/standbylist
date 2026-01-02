@@ -1,8 +1,10 @@
 // src/components/CalendarView.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabaseClient";
 
-// ---------- date helpers ----------
+/* =========================================================
+   Date helpers (YYYY-MM-DD)
+========================================================= */
 function ymd(d) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -38,7 +40,11 @@ function dayNum(d) {
 
 function isToday(d) {
   const now = new Date();
-  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
 }
 
 function clampPlatoonLetter(v) {
@@ -46,16 +52,9 @@ function clampPlatoonLetter(v) {
   return s === "A" || s === "B" || s === "C" || s === "D" ? s : "";
 }
 
-// ---------- styling helpers ----------
-function platoonLetterClass(letter) {
-  const L = clampPlatoonLetter(letter);
-  if (L === "A") return "text-sky-700";
-  if (L === "B") return "text-slate-900";
-  if (L === "C") return "text-emerald-700";
-  if (L === "D") return "text-rose-700";
-  return "text-slate-400";
-}
-
+/* =========================================================
+   Styling helpers
+========================================================= */
 function rosterPillClass(letter) {
   const L = clampPlatoonLetter(letter);
   if (L === "A") return "bg-sky-100 text-sky-800 border-sky-200";
@@ -64,7 +63,6 @@ function rosterPillClass(letter) {
   if (L === "D") return "bg-rose-100 text-rose-800 border-rose-200";
   return "bg-slate-100 text-slate-500 border-slate-200";
 }
-
 
 function dayNightPillClass(kind) {
   // kind: "DAY" | "NIGHT"
@@ -76,14 +74,14 @@ function dayNightPillClass(kind) {
 function standbyPillClass(kind) {
   // kind: "SBYA" | "SBY_DAY" | "SBY_NIGHT"
   if (kind === "SBYA") return "bg-emerald-100 text-emerald-800 border-emerald-200";
-  // ✅ SBY (orange/peach)
   if (kind === "SBY_DAY") return "bg-orange-100 text-orange-800 border-orange-200";
   if (kind === "SBY_NIGHT") return "bg-orange-100 text-orange-800 border-orange-200";
-
   return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
-
+/* =========================================================
+   Month input helpers
+========================================================= */
 function toMonthValue(d) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -99,22 +97,33 @@ function fromMonthValue(v) {
   return new Date(y, m - 1, 1);
 }
 
-/**
- * CalendarView
- * Props:
- * - userId (uuid)
- * - mode: "shift" | "mine"
- * - homePlatoon: "A"|"B"|"C"|"D"|""
- * - onSelectStandby: (standbyRow) => void
- * - onGoSettings?: () => void
- */
-export default function CalendarView({ userId, mode = "shift", homePlatoon = "", onSelectStandby, onGoSettings }) {
+/* =========================================================
+   CalendarView
+   Props:
+   - userId (uuid)
+   - mode: "shift" | "mine"
+   - homePlatoon: "A"|"B"|"C"|"D"|""
+   - onSelectStandby: (standbyRow) => void
+   - onGoSettings?: () => void
+========================================================= */
+export default function CalendarView({
+  userId,
+  mode = "shift",
+  homePlatoon = "",
+  onSelectStandby,
+  onGoSettings,
+}) {
   const [cursorMonth, setCursorMonth] = useState(() => new Date());
   const [loading, setLoading] = useState(false);
   const [rosterRows, setRosterRows] = useState([]);
   const [standbyRows, setStandbyRows] = useState([]);
 
-  // Compute visible calendar grid range (Sun-first, full weeks)
+  const home = clampPlatoonLetter(homePlatoon);
+  const needsHomePlatoon = mode === "mine" && !home;
+
+  /* -----------------------------
+     Build visible grid (Sun-first, full weeks)
+  ----------------------------- */
   const grid = useMemo(() => {
     const first = startOfMonth(cursorMonth);
     const last = endOfMonth(cursorMonth);
@@ -136,18 +145,25 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
     return { first, last, gridStart, gridEnd, days };
   }, [cursorMonth]);
 
-  // roster lookup
+  /* -----------------------------
+     Roster lookup by date
+  ----------------------------- */
   const rosterByDate = useMemo(() => {
     const m = new Map();
     for (const r of rosterRows || []) {
       const key = String(r.date || "");
       if (!key) continue;
-      m.set(key, { day: clampPlatoonLetter(r.day_platoon), night: clampPlatoonLetter(r.night_platoon) });
+      m.set(key, {
+        day: clampPlatoonLetter(r.day_platoon),
+        night: clampPlatoonLetter(r.night_platoon),
+      });
     }
     return m;
   }, [rosterRows]);
 
-  // standby lookup (my calendar only)
+  /* -----------------------------
+     Standby lookup by date (for My Calendar overlay)
+  ----------------------------- */
   const standbysByDate = useMemo(() => {
     const m = new Map();
     for (const s of standbyRows || []) {
@@ -159,7 +175,9 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
     return m;
   }, [standbyRows]);
 
-  // Fetch roster + (optional) standbys for the visible grid range
+  /* -----------------------------
+     Fetch roster + (optional) standbys for visible range
+  ----------------------------- */
   useEffect(() => {
     if (!userId) return;
 
@@ -219,6 +237,9 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
     };
   }, [userId, grid.gridStart, grid.gridEnd, mode]);
 
+  /* -----------------------------
+     Nav
+  ----------------------------- */
   function goPrevMonth() {
     setCursorMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1));
   }
@@ -230,16 +251,16 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
   }
 
   const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const home = clampPlatoonLetter(homePlatoon);
-  const needsHomePlatoon = mode === "mine" && !home;
 
   return (
     <div>
       {/* prompt if home platoon missing */}
       {needsHomePlatoon && (
         <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-4">
-          <div className="text-sm font-extrabold text-amber-900">Set your Home Platoon to use “My calendar”</div>
-          <div className="mt-1 text-sm text-amber-900/80">Go to Settings → Home platoon, then come back here.</div>
+          <div className="text-sm font-extrabold text-amber-900">
+            Set your Home Platoon to use “My calendar”
+          </div>
+          <div className="mt-1 text-sm text-amber-900/80">Go to Settings → Home platoon, then come back.</div>
           <div className="mt-3">
             <button
               type="button"
@@ -252,58 +273,54 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
         </div>
       )}
 
-    <div className="mb-3 space-y-2">
-      <div className="text-2xl font-extrabold text-slate-900 text-center">
-        {monthLabel(cursorMonth)}
+      {/* Header */}
+      <div className="mb-3 space-y-2">
+        <div className="text-2xl font-extrabold text-slate-900 text-center">{monthLabel(cursorMonth)}</div>
+
+        {mode === "mine" && home && (
+          <div className="mt-1 text-center text-xs text-slate-500">Viewing {home} Platoon’s pattern</div>
+        )}
+
+        <div className="flex items-center justify-center gap-2">
+          <input
+            type="month"
+            value={toMonthValue(cursorMonth)}
+            onChange={(e) => {
+              const next = fromMonthValue(e.target.value);
+              if (next) setCursorMonth(next);
+            }}
+            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+          />
+
+          <button
+            type="button"
+            onClick={goToday}
+            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+          >
+            Today
+          </button>
+
+          <button
+            type="button"
+            onClick={goPrevMonth}
+            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            aria-label="Previous month"
+            title="Previous month"
+          >
+            ‹
+          </button>
+
+          <button
+            type="button"
+            onClick={goNextMonth}
+            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            aria-label="Next month"
+            title="Next month"
+          >
+            ›
+          </button>
+        </div>
       </div>
-
-{mode === "mine" && home && (
-    <div className="mt-1 text-center text-xs text-slate-500">
-      Viewing {home} Platoon’s pattern
-    </div>
-)}
-{/* Second row: controls */}
-      <div className="flex items-center justify-center gap-2">
-        <input
-          type="month"
-          value={toMonthValue(cursorMonth)}
-          onChange={(e) => {
-            const next = fromMonthValue(e.target.value);
-            if (next) setCursorMonth(next);
-          }}
-          className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-        />
-
-        <button
-          type="button"
-          onClick={goToday}
-          className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-        >
-          Today
-        </button>
-
-        <button
-          type="button"
-          onClick={goPrevMonth}
-          className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-          aria-label="Previous month"
-          title="Previous month"
-        >
-          ‹
-        </button>
-
-        <button
-          type="button"
-          onClick={goNextMonth}
-          className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-          aria-label="Next month"
-          title="Next month"
-        >
-          ›
-        </button>
-      </div>
-    </div>
-
 
       {loading && <div className="text-sm text-slate-500 mb-2">Loading…</div>}
 
@@ -323,10 +340,11 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
             const key = ymd(d);
             const inMonth = d.getMonth() === cursorMonth.getMonth();
             const today = isToday(d);
-
             const roster = rosterByDate.get(key) || { day: "", night: "" };
 
-            // --- SHIFT CALENDAR (platoon letters) ---
+            // =====================================================
+            // SHIFT CALENDAR (platoon letters)
+            // =====================================================
             if (mode === "shift") {
               return (
                 <div
@@ -368,21 +386,48 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
               );
             }
 
-            // --- MY CALENDAR ---
+            // =====================================================
+            // MY CALENDAR (home platoon + standby overlay)
+            // =====================================================
             const standbysHere = standbysByDate.get(key) || [];
-            const dayStandby = standbysHere.find((s) => String(s.shift_type || "").toLowerCase() === "day");
-            const nightStandby = standbysHere.find((s) => String(s.shift_type || "").toLowerCase() === "night");
+
+            const dayStandby = standbysHere.find(
+              (s) =>
+                !s?.deleted_at && String(s.shift_type || "").trim().toLowerCase() === "day"
+            );
+
+            const nightStandby = standbysHere.find(
+              (s) =>
+                !s?.deleted_at && String(s.shift_type || "").trim().toLowerCase() === "night"
+            );
 
             const youHaveDay = home && roster.day === home;
             const youHaveNight = home && roster.night === home;
 
-            const dayHasSBYA = Boolean(dayStandby && dayStandby.worked_for_me);
-            const nightHasSBYA = Boolean(nightStandby && nightStandby.worked_for_me);
+            // ✅ SBYA = "they work for me" (worked_for_me === true) AND shift type matches.
+            // We use .some() so it works even if there are multiple entries on the same date.
+            const dayHasSBYA = standbysHere.some(
+              (s) =>
+                !s?.deleted_at &&
+                s?.worked_for_me === true &&
+                String(s.shift_type || "").trim().toLowerCase() === "day"
+            );
 
-            const clickableStandby = dayStandby || nightStandby;
+            const nightHasSBYA = standbysHere.some(
+              (s) =>
+                !s?.deleted_at &&
+                s?.worked_for_me === true &&
+                String(s.shift_type || "").trim().toLowerCase() === "night"
+            );
+
+            // Click priority: an SBYA on this date (most important), else whatever exists
+            const clickableStandby =
+              standbysHere.find((s) => !s?.deleted_at && s?.worked_for_me === true) ||
+              dayStandby ||
+              nightStandby;
+
             const hasClickHandler = typeof onSelectStandby === "function";
             const canClick = Boolean(clickableStandby && hasClickHandler);
-
 
             return (
               <button
@@ -394,15 +439,20 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                   onSelectStandby(clickableStandby);
                 }}
                 className={[
-                 "min-h-[88px] border-b border-slate-200 border-r border-slate-200 last:border-r-0",
+                  "min-h-[88px] border-b border-slate-200 border-r border-slate-200 last:border-r-0",
                   "p-1.5 text-left overflow-hidden",
                   inMonth ? "bg-white" : "bg-slate-50",
                   today ? "ring-2 ring-slate-900 ring-inset" : "",
                   canClick ? "hover:bg-slate-50 active:scale-[0.995] transition" : "cursor-default",
                 ].join(" ")}
                 title={canClick ? "Tap to view standby" : undefined}
+              >
+                <div
+                  className={[
+                    "text-[15px] font-medium text-center leading-none",
+                    inMonth ? "text-slate-900" : "text-slate-400",
+                  ].join(" ")}
                 >
-                <div className={["text-[15px]] font-medium text-center leading-none", inMonth ? "text-slate-900" : "text-slate-400"].join(" ")}>
                   {dayNum(d)}
                 </div>
 
@@ -410,7 +460,6 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                 <div className="relative mt-1.5 h-[56px]">
                   {/* DAY lane */}
                   <div className="absolute left-0 right-0 top-0 flex justify-center">
-                    {/* ✅ STACKED pills (fix) */}
                     <div className="flex flex-col items-center gap-1">
                       {youHaveDay && (
                         <span
@@ -431,7 +480,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                             standbyPillClass(dayStandby.worked_for_me ? "SBYA" : "SBY_DAY"),
                           ].join(" ")}
                         >
-                          {dayStandby.worked_for_me ? "SBYA" : "SBY(DS)"}
+                          {dayStandby.worked_for_me ? "SBYA(DS)" : "SBY(DS)"}
                         </span>
                       )}
                     </div>
@@ -439,7 +488,6 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
 
                   {/* NIGHT lane */}
                   <div className="absolute left-0 right-0 bottom-0 flex justify-center">
-                    {/* ✅ STACKED pills (fix) */}
                     <div className="flex flex-col items-center gap-1">
                       {youHaveNight && (
                         <span
@@ -460,7 +508,7 @@ export default function CalendarView({ userId, mode = "shift", homePlatoon = "",
                             standbyPillClass(nightStandby.worked_for_me ? "SBYA" : "SBY_NIGHT"),
                           ].join(" ")}
                         >
-                          {nightStandby.worked_for_me ? "SBYA" : "SBY(NS)"}
+                          {nightStandby.worked_for_me ? "SBYA(NS)" : "SBY(NS)"}
                         </span>
                       )}
                     </div>
