@@ -37,7 +37,7 @@ import { useDrawerAutoCollapse } from "./standby/hooks/useDrawerAutoCollapse";
 import AddStandbyModal from "./standby/modals/AddStandbyModal";
 
 // NOTE: keep this import path EXACTLY as your filesystem uses.
-import StandbyDetailModal from "./standby/Modals/StandbyDetailModal";
+import StandbyDetailModal from "./standby/modals/StandbyDetailModal";
 
 import UpcomingView from "./standby/views/UpcomingView";
 import StandbysView from "./standby/views/StandbysView";
