@@ -20,35 +20,33 @@ const STEPS = [
     body: (
       <div className="space-y-3">
        <p className="text-slate-700 leading-relaxed">
-          A standby is just an agreement between you and someone else to work shifts for each other.
-        </p>
+        When you add a standby, you’ll choose one option:</p>
         <div className="rounded-xl border border-slate-200 p-3">
-          <div className="font-semibold text-slate-900">If you work for someone →</div>
+          <div className="font-semibold text-slate-900">I worked for them →</div>
           <div className="text-slate-700"> they owe you a shift</div>
         </div>
         <div className="rounded-xl border border-slate-200 p-3">
-          <div className="font-semibold text-slate-900">If someone works for you →</div>
+          <div className="font-semibold text-slate-900">They worked for me →</div>
           <div className="text-slate-700"> you owe them a shift</div>
         </div>
         <p className="text-slate-700 leading-relaxed">
-          That’s it. Everything in the app is built around this agreement.
-        </p>
+          You don’t need to worry about matching dates or shifts later — just record who worked for who.</p>
       </div>
     ),
     primary: "Next",
   },
   {
-    title: "Where to look",
+    title: "Finding your way around",
     body: (
       <div className="space-y-3">
         <p className="text-slate-700 leading-relaxed">
           <span className="font-semibold">Tap ☰ to open the menu.</span>
         </p>
         <p className="text-slate-700 leading-relaxed">
-          <span className="font-semibold">Owed to me</span> - people who currently owe you a shift.
+          <span className="font-semibold">Owed to me</span> - all the people who currently owe you a shift.
         </p>
         <p className="text-slate-700 leading-relaxed mt-3">
-          <span className="font-semibold">I owe</span> - people you currently owe a shift to. 
+          <span className="font-semibold">I owe</span> - all the people you currently owe a shift to. 
         </p>
         <p className="text-slate-700 leading-relaxed mt-3">
           <span className="font-semibold">Upcoming</span> - upcoming standbys you have requested or agreed to fill.
@@ -57,7 +55,7 @@ const STEPS = [
           <span className="font-semibold">Calendar</span> - shows your platoon's shift pattern with your standby commitments overlaid.
         </p>
         <p className="text-slate-700 leading-relaxed">
-          You can tap any entry to see details and change it later.
+          You can tap any entry to see or edit details.
         </p>
       </div>
     ),
@@ -68,10 +66,10 @@ const STEPS = [
     body: (
       <>
         <p className="text-slate-700 leading-relaxed">
-          To get started, <span className="font-semibold">add any standbys you already have.</span>
+          To get started, <span className="font-semibold">add any standbys you currently have.</span> Don't worry about all your old ones for now.
         </p>
         <p className="text-slate-700 leading-relaxed mt-3">
-          Tap <span className="font-semibold">+ Add standby</span>, enter who worked for who, and the app sorts the rest.
+          Tap <span className="font-semibold">+ Add standby</span>, enter the date, who worked for who, and the app sorts the rest.
         </p>
         <p className="text-slate-700 leading-relaxed mt-3">
           Whenever you arrange a new standby, <span className="font-semibold">add the shift here.</span>

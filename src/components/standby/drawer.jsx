@@ -1,5 +1,5 @@
 // src/components/standby/Drawer.jsx
-import React from "react";
+import React, { useMemo } from "react";
 
 export default function Drawer({
   drawerOpen,
@@ -24,12 +24,16 @@ export default function Drawer({
   onGoOwe,
   email = "",
 }) {
+  const appVersion = useMemo(() => {
+  return String(import.meta.env?.VITE_APP_VERSION || "MISSING_ENV").trim();
+}, []);
+
   return (
     <>
       {drawerOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/25"
-          onClick={() => setDrawerOpen((v) => !v)}
+          onClick={() => setDrawerOpen(false)}
         />
       )}
 
@@ -53,26 +57,21 @@ export default function Drawer({
             aria-label="Go to home"
             title="Home"
           >
-            <div className="text-2xl font-extrabold text-slate-900 hover:underline">
+            <div className="text-4xl font-extrabold text-slate-900 hover:underline">
               Shift IOU
             </div>
           </button>
-          <div className="text-[16pt] font-light text-slate-400 leading-tight">
-             [BETA]
-          </div>
-
           {email ? (
-            <div className="mt-1 text-s text-bold text-slate-600 truncate">{email}</div>
+            <div className="mt-1 text-s text-slate-600 truncate">{email}</div>
           ) : (
-            <div className="mt-1 text-s text-bold text-slate-500"> </div>
+            <div className="mt-1 text-s font-bold text-slate-500">&nbsp;</div>
           )}
 
           <div className="mt-3">
-            <div className="text-xs tracking-wide text-slate-500">
-              Overall standby position:
-            </div>
+            <div className="text-sm font-bold text-slate-600">Overall standby position:</div>
 
-            <button
+            <div className="mt-1">
+              <button
                 type="button"
                 onClick={onGoOwed}
                 className={[
@@ -82,7 +81,9 @@ export default function Drawer({
               >
                 + {overallPlus}
               </button>
+
               <span className="text-slate-400 mx-2 text-2xl font-bold select-none">/</span>
+
               <button
                 type="button"
                 onClick={onGoOwe}
@@ -93,39 +94,32 @@ export default function Drawer({
               >
                 - {overallMinus}
               </button>
-
+            </div>
           </div>
         </div>
 
-        {/* Menu */}
-        
-        <nav className="p-3 space-y-2 overflow-y-auto">
+        {/* Scrollable Menu */}
+        <nav className="p-3 space-y-2 overflow-y-auto overscroll-contain flex-1">
+          <button
+            type="button"
+            onClick={() => {
+              setDrawerOpen(false);
+              onAddStandby?.();
+            }}
+            className="mt-1 w-full rounded-md bg-slate-900 text-white px-3 py-2 text-s font-medium hover:bg-slate-800 active:scale-[0.99] transition"
+            title="Add standby"
+          >
+            + Add Standby
+          </button>
 
-            <button
-                type="button"
-                onClick={() => {
-                  setDrawerOpen(false);
-                  onAddStandby?.();
-                }}
-                className="mt-4 w-full rounded-md bg-slate-900 text-white px-3 py-2 text-s font-medium hover:bg-slate-800 active:scale-[0.99] transition"
-                title="Add standby"
-              >
-                + Add Standby
-              </button>
-              
           <GroupButton
             label="Standbys"
             active={drawerGroup === "standbys" || section === "standbys"}
-            onClick={() =>
-              setDrawerGroup((g) => (g === "standbys" ? "" : "standbys"))
-            }
+            onClick={() => setDrawerGroup((g) => (g === "standbys" ? "" : "standbys"))}
           />
           {drawerGroup === "standbys" && (
             <div className="ml-2 border-l border-slate-100 pl-3 space-y-1">
-              <DrawerButton
-                label="Owed to me"
-                onClick={() => goStandbys("owed")}
-              />
+              <DrawerButton label="Owed to me" onClick={() => goStandbys("owed")} />
               <DrawerButton label="I owe" onClick={() => goStandbys("owe")} />
             </div>
           )}
@@ -133,67 +127,56 @@ export default function Drawer({
           <GroupButton
             label="Upcoming"
             active={drawerGroup === "upcoming" || section === "upcoming"}
-            onClick={() =>
-              setDrawerGroup((g) => (g === "upcoming" ? "" : "upcoming"))
-            }
+            onClick={() => setDrawerGroup((g) => (g === "upcoming" ? "" : "upcoming"))}
           />
           {drawerGroup === "upcoming" && (
             <div className="ml-2 border-l border-slate-100 pl-3 space-y-1">
-              <DrawerButton
-                label="I’ve agreed to"
-                onClick={() => goUpcoming("i_work")}
-              />
-              <DrawerButton
-                label="I’ve requested"
-                onClick={() => goUpcoming("they_work")}
-              />
+              <DrawerButton label="I’ve agreed to" onClick={() => goUpcoming("i_work")} />
+              <DrawerButton label="I’ve requested" onClick={() => goUpcoming("they_work")} />
             </div>
           )}
 
           <GroupButton
             label="History"
             active={drawerGroup === "history" || section === "history"}
-            onClick={() =>
-              setDrawerGroup((g) => (g === "history" ? "" : "history"))
-            }
+            onClick={() => setDrawerGroup((g) => (g === "history" ? "" : "history"))}
           />
           {drawerGroup === "history" && (
             <div className="ml-2 border-l border-slate-100 pl-3 space-y-1">
-              <DrawerButton
-                label="Settled"
-                onClick={() => goHistory("settled")}
-              />
-              <DrawerButton
-                label="Deleted"
-                onClick={() => goHistory("deleted")}
-              />
+              <DrawerButton label="Settled" onClick={() => goHistory("settled")} />
+              <DrawerButton label="Deleted" onClick={() => goHistory("deleted")} />
             </div>
           )}
 
           <GroupButton
             label="Calendar"
             active={drawerGroup === "calendar" || section === "calendar"}
-            onClick={() =>
-              setDrawerGroup((g) => (g === "calendar" ? "" : "calendar"))
-            }
+            onClick={() => setDrawerGroup((g) => (g === "calendar" ? "" : "calendar"))}
           />
           {drawerGroup === "calendar" && (
             <div className="ml-2 border-l border-slate-100 pl-3 space-y-1">
-              <DrawerButton
-                label="My calendar"
-                onClick={() => goCalendar("mine")}
-              />
-              <DrawerButton
-                label="Shift calendar"
-                onClick={() => goCalendar("shift")}
-              />
+              <DrawerButton label="My calendar" onClick={() => goCalendar("mine")} />
+              <DrawerButton label="Shift calendar" onClick={() => goCalendar("shift")} />
             </div>
           )}
-
-          <div className="h-2" />
-
-          <DrawerButton label="Settings and About" onClick={() => goSettings()} />
         </nav>
+
+        {/* Bottom-pinned Settings */}
+        <div className="shrink-0 border-t border-slate-200 p-3">
+          <DrawerButton
+            label="Settings and About"
+            onClick={() => {
+              setDrawerOpen(false);
+              goSettings();
+            }}
+          />
+
+          {/* Subtle footer meta (recommended to keep here; it reassures users + meets acceptance criteria) */}
+          <div className="mt-2 px-3 text-[11px] text-slate-300 leading-snug">
+            <div className="font-semibold text-slate-300">v{appVersion} • BETA</div>
+            <div>© {new Date().getFullYear()} Shift IOU</div>
+          </div>
+        </div>
       </aside>
     </>
   );
@@ -205,9 +188,7 @@ function DrawerButton({ label, active, onClick }) {
       onClick={onClick}
       className={[
         "w-full text-left px-3 py-2 rounded-md text-base font-medium transition",
-        active
-          ? "bg-slate-100 text-slate-900"
-          : "text-slate-700 hover:bg-slate-50",
+        active ? "bg-slate-100 text-slate-900" : "text-slate-700 hover:bg-slate-50",
       ].join(" ")}
       type="button"
     >
@@ -222,9 +203,7 @@ function GroupButton({ label, active, onClick }) {
       onClick={onClick}
       className={[
         "w-full text-left px-3 py-1.5 rounded-md text-base font-bold transition leading-tight",
-        active
-          ? "bg-slate-50 text-slate-900"
-          : "text-slate-800 hover:bg-slate-50",
+        active ? "bg-slate-50 text-slate-900" : "text-slate-800 hover:bg-slate-50",
       ].join(" ")}
       type="button"
     >

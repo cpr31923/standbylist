@@ -1,5 +1,9 @@
 import { supabase } from "../../supabaseClient";
 
+function namesMatch(a, b) {
+  return normalizeName(a) === normalizeName(b);
+}
+
 export function todayYMD() {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -78,7 +82,22 @@ export function firstName(full) {
   return s.split(/\s+/)[0];
 }
 
-export async function openStandbyDetailById({ id, resetOverlays, setDrawerOpen, setSelectedStandby }) {
+export function hasThreeWayMarker(notes) {
+  const s = String(notes || "").toLowerCase();
+  return s.includes("three way standby");
+}
+
+// New: single source of truth for auth redirect target
+export function authRedirectTo() {
+  return `${window.location.origin}/auth/callback`;
+}
+
+export async function openStandbyDetailById({
+  id,
+  resetOverlays,
+  setDrawerOpen,
+  setSelectedStandby,
+}) {
   if (!id) return;
 
   resetOverlays?.();

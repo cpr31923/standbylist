@@ -1,60 +1,168 @@
 // src/Login.jsx
-import { useEffect, useState } from "react";
-import { supabase } from "./supabaseClient";
+import { useEffect, useMemo, useState } from "react";
+import { supabase, APP_VERSION } from "./supabaseClient";
 
 export default function Login() {
   const [mode, setMode] = useState("signin"); // signin | signup | reset
 
+  // Shared (must persist across mode switches)
   const [email, setEmail] = useState("");
+
+  // Secondary / fallback only
   const [password, setPassword] = useState("");
+  const [showPasswordSignin, setShowPasswordSignin] = useState(false);
+  const [usePasswordFallback, setUsePasswordFallback] = useState(false);
 
-  const [homePlatoon, setHomePlatoon] = useState("");
-
-  // Signup email-first flow
+  // Optional signup details
   const [signupStep, setSignupStep] = useState("email"); // email | details
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [homePlatoon, setHomePlatoon] = useState("");
 
-  // UX
+  // UX state
   const [loading, setLoading] = useState(false);
+  const [sent, setSent] = useState(false); // “check your email” state for magic links
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+
+  const cleanEmail = useMemo(() => (email || "").trim().toLowerCase(), [email]);
 
   useEffect(() => {
+    // Don’t clear email when switching modes
     setMsg("");
     setErr("");
     setLoading(false);
-    setShowPassword(false);
+    setSent(false);
 
     if (mode === "signup") setSignupStep("email");
+
+    // Reset password fallback when leaving signin
+    if (mode !== "signin") {
+      setUsePasswordFallback(false);
+      setPassword("");
+      setShowPasswordSignin(false);
+    }
+
+    // If leaving signup, reset the details step
     if (mode !== "signup") {
       setSignupStep("email");
       setFirstName("");
       setLastName("");
+      setHomePlatoon("");
     }
   }, [mode]);
 
-  const cleanEmail = (email || "").trim().toLowerCase();
+  function setErrorNice(e) {
+    const m = e?.message || "";
+    // Keep it calm and non-technical
+    if (String(m).toLowerCase().includes("invalid login")) {
+      setErr("That didn’t work. Check your details and try again.");
+      return;
+    }
+    setErr(m || "Something went wrong. Try again.");
+  }
 
-  async function sendReset(emailToReset) {
-    const e = (emailToReset || "").trim().toLowerCase();
-    if (!e) {
-      setErr("Please enter an email.");
+  async function sendMagicLink({ intent }) {
+    if (!cleanEmail) {
+      setErr("Enter your email address to continue.");
       return;
     }
 
     setLoading(true);
-    setMsg("");
     setErr("");
+    setMsg("");
+    setSent(false);
+
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(e, {
-        redirectTo: window.location.origin,
+      const redirectTo = `${window.location.origin}/auth/callback`;
+
+      // Magic Link / OTP email
+      // shouldCreateUser:
+      // - signin: false (don’t create new users accidentally)
+      // - signup: true (create + verify via link)
+      const shouldCreateUser = intent === "signup";
+
+      const payload = {
+        email: cleanEmail,
+        options: {
+          emailRedirectTo: redirectTo,
+          shouldCreateUser,
+        },
+      };
+
+      // For signup, attach optional profile metadata
+      if (intent === "signup") {
+        payload.options.data = {
+          first_name: firstName.trim() || null,
+          last_name: lastName.trim() || null,
+          full_name: `${firstName.trim()} ${lastName.trim()}`.trim() || null,
+          home_platoon: homePlatoon || null,
+        };
+      }
+
+      const { error } = await supabase.auth.signInWithOtp(payload);
+      if (error) throw error;
+
+      setSent(true);
+      if (intent === "signup") {
+        setMsg("Check your email — we’ve sent a link to verify and sign you in.");
+      } else {
+        setMsg("Check your email — we’ve sent a sign-in link.");
+      }
+    } catch (e) {
+      setErrorNice(e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function signInWithPassword() {
+    if (!cleanEmail) {
+      setErr("Enter your email address to continue.");
+      return;
+    }
+    if (!password) {
+      setErr("Enter your password to sign in.");
+      return;
+    }
+
+    setLoading(true);
+    setErr("");
+    setMsg("");
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password,
       });
       if (error) throw error;
-      setMsg("Password reset email sent. Check your inbox.");
-    } catch (e2) {
-      setErr(e2?.message || "Could not send reset email.");
+      setMsg("Signed in.");
+    } catch (e) {
+      setErrorNice(e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function sendReset() {
+    if (!cleanEmail) {
+      setErr("Enter your email address to continue.");
+      return;
+    }
+
+    setLoading(true);
+    setErr("");
+    setMsg("");
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      });
+      if (error) throw error;
+
+      setMsg("Check your email — we’ve sent a password reset link.");
+    } catch (e) {
+      setErrorNice(e);
     } finally {
       setLoading(false);
     }
@@ -62,208 +170,164 @@ export default function Login() {
 
   async function handleSubmit(e) {
     e.preventDefault();
-    setLoading(true);
-    setMsg("");
     setErr("");
+    setMsg("");
 
-    try {
-      if (!cleanEmail) throw new Error("Please enter an email.");
-
-      // SIGN IN
-      if (mode === "signin") {
-        if (!password) throw new Error("Please enter a password.");
-
-        const { error } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password,
-        });
-        if (error) throw error;
-
-        setMsg("Signed in.");
-        return;
+    if (mode === "signin") {
+      if (usePasswordFallback) {
+        await signInWithPassword();
+      } else {
+        await sendMagicLink({ intent: "signin" });
       }
-
-      // RESET
-      if (mode === "reset") {
-        await sendReset(cleanEmail);
-        return;
-      }
-
-      // SIGN UP (email-first)
-      if (mode === "signup") {
-        if (signupStep === "email") {
-          setSignupStep("details");
-          return;
-        }
-
-        if (!firstName.trim()) throw new Error("Please enter your first name.");
-        if (!lastName.trim()) throw new Error("Please enter your last name.");
-        if (!password) throw new Error("Please create a password (must have uppercase, lowercase and numbers. Min. 8 characters).");
-        if (password.length < 6) throw new Error("Password must be at least 6 characters.");
-
-        const { data, error } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password,
-          options: {
-            emailRedirectTo: window.location.origin,
-            data: {
-              first_name: firstName.trim(),
-              last_name: lastName.trim(),
-              full_name: `${firstName.trim()} ${lastName.trim()}`.trim(),
-              home_platoon: homePlatoon || null,
-            },
-          },
-        });
-
-        if (error) {
-          const m = String(error.message || "").toLowerCase();
-          if (m.includes("already") || m.includes("registered") || m.includes("exists")) {
-            setErr("That email already has an account. Use Sign in, or reset your password.");
-            setMode("reset");
-            return;
-          }
-          throw error;
-        }
-
-        if (data?.session) {
-          setMsg("Account created and signed in.");
-        } else {
-          setMsg("Account created. Check your inbox to confirm your email, then come back and sign in.");
-        }
-        return;
-      }
-    } catch (e2) {
-      setErr(e2?.message || "Something went wrong.");
-    } finally {
-      setLoading(false);
+      return;
     }
+
+    if (mode === "reset") {
+      await sendReset();
+      return;
+    }
+
+    // signup
+    if (signupStep === "email") {
+      if (!cleanEmail) {
+        setErr("Enter your email address to continue.");
+        return;
+      }
+      setSignupStep("details");
+      return;
+    }
+
+    await sendMagicLink({ intent: "signup" });
   }
+
+  const primaryButtonText =
+    loading
+      ? "Sending…"
+      : mode === "signin"
+      ? (usePasswordFallback ? "Sign in" : "Send sign-in link")
+      : mode === "reset"
+      ? "Send reset link"
+      : signupStep === "email"
+      ? "Continue"
+      : "Create account";
 
   return (
     <div style={styles.wrap}>
       <div style={styles.stack}>
-      <div style={styles.card}>
-        <h1 style={styles.title}>Shift IOU</h1>
+        <div style={styles.card}>
+          <h1 style={styles.title}>Shift IOU</h1>
 
-        {/* Segmented tabs: stays on one line */}
-        <div style={styles.segment}>
-          <button
-            type="button"
-            onClick={() => setMode("signin")}
-            style={{ ...styles.segmentBtn, ...(mode === "signin" ? styles.segmentBtnActive : {}) }}
-          >
-            Sign in
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("signup")}
-            style={{ ...styles.segmentBtn, ...(mode === "signup" ? styles.segmentBtnActive : {}) }}
-          >
-            Create account
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("reset")}
-            style={{ ...styles.segmentBtn, ...(mode === "reset" ? styles.segmentBtnActive : {}) }}
-          >
-            Forgot password
-          </button>
-        </div>
+          {/* Only two primary intents */}
+          <div style={styles.segment}>
+            <button
+              type="button"
+              onClick={() => setMode("signin")}
+              style={{ ...styles.segmentBtn, ...(mode === "signin" ? styles.segmentBtnActive : {}) }}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("signup")}
+              style={{ ...styles.segmentBtn, ...(mode === "signup" ? styles.segmentBtnActive : {}) }}
+            >
+              Create account
+            </button>
+          </div>
 
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <label style={styles.label}>
-            Email
-            <input
-              style={styles.input}
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@domain.com"
-            />
-          </label>
-
-          {mode === "signin" && (
+          <form onSubmit={handleSubmit} style={styles.form}>
             <label style={styles.label}>
-              Password
-              <div style={styles.passwordRow}>
-                <input
-                  style={{ ...styles.input, ...styles.passwordInput }}
-                  type={showPassword ? "text" : "password"}
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Your password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  style={styles.eyeBtn}
-                >
-                  {showPassword ? "Hide" : "Show"}
-                </button>                
-              </div>
+              Email
+              <input
+                style={styles.input}
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@domain.com"
+                disabled={loading}
+              />
             </label>
-          )}
 
-          {mode === "reset" && (
-            <div style={styles.helpBlock}>
-              Enter your email and we’ll send you a password reset link.
-            </div>
-          )}
+            {/* SIGN IN copy + options */}
+            {mode === "signin" && !sent && (
+              <div style={styles.helpBlock}>
+                {usePasswordFallback ? (
+                  <>
+                    Sign in with your password (if you have created one).
+                  </>
+                ) : (
+                  <>
+                    We’ll email you a sign-in link. No password needed.
+                  </>
+                )}
+              </div>
+            )}
 
-
-          {mode === "signup" && (
-            <>
-              {signupStep === "email" ? (
-                <div style={styles.helpBlock}>
-                  Enter your email to begin.
+            {/* SIGN IN fallback password UI */}
+            {mode === "signin" && usePasswordFallback && !sent && (
+              <label style={styles.label}>
+                Password
+                <div style={styles.passwordRow}>
+                  <input
+                    style={{ ...styles.input, ...styles.passwordInput }}
+                    type={showPasswordSignin ? "text" : "password"}
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Your password"
+                    disabled={loading}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPasswordSignin((v) => !v)}
+                    style={styles.eyeBtn}
+                    disabled={loading}
+                  >
+                    {showPasswordSignin ? "Hide" : "Show"}
+                  </button>
                 </div>
-              ) : (
-                <>
-                  <div style={styles.twoCol}>
-                    <label style={styles.label}>
-                      First name
-                      <input
-                        style={styles.input}
-                        value={firstName}
-                        onChange={(e) => setFirstName(e.target.value)}
-                        placeholder="First name"
-                        autoComplete="given-name"
-                      />
-                    </label>
-                    <label style={styles.label}>
-                      Last name
-                      <input
-                        style={styles.input}
-                        value={lastName}
-                        onChange={(e) => setLastName(e.target.value)}
-                        placeholder="Last name"
-                        autoComplete="family-name"
-                      />
-                    </label>
-                  </div>
+              </label>
+            )}
 
-                  <label style={styles.label}>
-                      Create password
-                      <div style={styles.passwordRow}>
+            {/* SIGN UP */}
+            {mode === "signup" && (
+              <>
+                {signupStep === "email" ? (
+                  <div style={styles.helpBlock}>
+                    Start with your email. We’ll send a link to verify and sign you in.
+                  </div>
+                ) : (
+                  <>
+                    <div style={styles.helpBlock}>
+                      Optional details — you can skip all of this and set it later in Settings.
+                    </div>
+
+                    <div style={styles.twoCol}>
+                      <label style={styles.label}>
+                        First name (optional)
                         <input
-                          style={{ ...styles.input, ...styles.passwordInput }}
-                          type={showPassword ? "text" : "password"}
-                          autoComplete="new-password"
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="Create a password"
+                          style={styles.input}
+                          value={firstName}
+                          onChange={(e) => setFirstName(e.target.value)}
+                          placeholder="First name"
+                          autoComplete="given-name"
+                          disabled={loading}
                         />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword((v) => !v)}
-                          style={styles.eyeBtn}
-                        >
-                          {showPassword ? "Hide" : "Show"}
-                        </button>
-                      </div>
-                    </label>
+                      </label>
+
+                      <label style={styles.label}>
+                        Last name (optional)
+                        <input
+                          style={styles.input}
+                          value={lastName}
+                          onChange={(e) => setLastName(e.target.value)}
+                          placeholder="Last name"
+                          autoComplete="family-name"
+                          disabled={loading}
+                        />
+                      </label>
+                    </div>
 
                     <label style={styles.label}>
                       Home platoon (optional)
@@ -271,6 +335,7 @@ export default function Login() {
                         style={styles.select}
                         value={homePlatoon}
                         onChange={(e) => setHomePlatoon(e.target.value)}
+                        disabled={loading}
                       >
                         <option value="">Skip for now</option>
                         <option value="A">A Platoon</option>
@@ -279,66 +344,140 @@ export default function Login() {
                         <option value="D">D Platoon</option>
                       </select>
                     </label>
-                </>
-              )}
-            </>
-          )}
 
-         {err && <div style={styles.err}>{err}</div>}
-         {msg && <div style={styles.msg}>{msg}</div>}
+                    <div style={styles.legal}>
+                      By creating an account, you agree to the app’s terms and privacy policy (see Settings → About).
+                    </div>
+                  </>
+                )}
+              </>
+            )}
 
-          {mode === "signup" && signupStep === "details" && (
-            <div style={styles.help}>
-              By creating an account, you agree to the app’s terms and privacy policy (see Settings → About).
+            {/* RESET (secondary intent) */}
+            {mode === "reset" && (
+              <div style={styles.helpBlock}>
+                We’ll email you a reset link. <span style={styles.muted}>If you didn’t request it, just ignore the email.</span>
+              </div>
+            )}
+
+            {/* “Check your email” state */}
+            {sent && (
+              <div style={styles.sentBox}>
+                <div style={styles.sentTitle}>Check your email</div>
+                <div style={styles.sentText}>
+                  We sent a sign-in link to <b>{cleanEmail}</b>.
+                  <br />
+                  If you didn’t request this, you can ignore the email.
+                </div>
+
+                <div style={styles.sentActions}>
+                  <button
+                    type="button"
+                    style={styles.secondaryBtn}
+                    onClick={() => {
+                      setSent(false);
+                      setMsg("");
+                    }}
+                    disabled={loading}
+                  >
+                    Use a different email
+                  </button>
+
+                  <button
+                    type="button"
+                    style={styles.secondaryBtn}
+                    onClick={() => {
+                      // resend
+                      if (mode === "signup") {
+                        sendMagicLink({ intent: "signup" });
+                      } else {
+                        sendMagicLink({ intent: "signin" });
+                      }
+                    }}
+                    disabled={loading}
+                  >
+                    Resend link
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {err && <div style={styles.err}>{err}</div>}
+            {msg && !sent && <div style={styles.msg}>{msg}</div>}
+
+            {!sent && (
+              <button type="submit" style={styles.btn} disabled={loading}>
+                {primaryButtonText}
+              </button>
+            )}
+
+            {/* Secondary actions (never competing with primary CTA) */}
+            {!sent && mode === "signin" && (
+              <div style={styles.secondaryLinks}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUsePasswordFallback((v) => !v);
+                    setErr("");
+                    setMsg("");
+                  }}
+                  style={styles.linkBtn}
+                  disabled={loading}
+                >
+                  {usePasswordFallback ? "Use email link instead" : "Use password instead"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("reset");
+                    setErr("");
+                    setMsg("");
+                  }}
+                  style={styles.linkBtn}
+                  disabled={loading}
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
+
+            {!sent && mode === "reset" && (
+              <div style={styles.secondaryLinks}>
+                <button
+                  type="button"
+                  onClick={() => setMode("signin")}
+                  style={styles.linkBtn}
+                  disabled={loading}
+                >
+                  Back to sign in
+                </button>
+              </div>
+            )}
+
+            {!sent && mode === "signup" && signupStep === "details" && (
+              <button
+                type="button"
+                style={styles.secondaryBtn}
+                onClick={() => setSignupStep("email")}
+                disabled={loading}
+              >
+                Back
+              </button>
+            )}
+          </form>
+
+          <div style={styles.footerHelp}>
+            <div style={styles.footerLine}>
+              Having trouble? Double-check spam/junk folders for the sign-in email.
             </div>
-          )}
-
-          <button type="submit" style={styles.btn} disabled={loading}>
-            {loading
-              ? "Working…"
-              : mode === "signin"
-              ? "Sign in"
-              : mode === "reset"
-              ? "Send reset email"
-              : signupStep === "email"
-              ? "Continue"
-              : "Create account"}
-          </button>
-
-          {mode === "signup" && signupStep === "details" && (
-            <button
-              type="button"
-              style={styles.secondaryBtn}
-              onClick={() => setSignupStep("email")}
-              disabled={loading}
-            >
-              Back
-            </button>
-          )}
-        </form>
-
-        {mode === "signin" && (
-          <p style={styles.help}>
-            Tip: If you don't have an account, use <b>Create Account</b>. If you’ve forgotten your password, use{" "}
-            <b>Forgot password</b>.
-          </p>
-        )}
-        {mode === "signup" && (
-          <p style={styles.help}>
-            Tip: If you already have an account, use <b>Sign in</b>. If you’ve forgotten your password, use{" "}
-            <b>Forgot password</b>.
-          </p>
-        )}
-        {mode === "reset" && (
-          <p style={styles.help}>
-            Tip: If you already have an account, use <b>Sign in</b>. If you don't have an account, use <b>Create Account</b>.
-          </p>
-        )}
-      </div>
-        <div style={{ ...styles.help, textAlign: "center", marginTop: 12 }}>
-          <b>© {new Date().getFullYear()} Shift IOU </b> [BETA]
+          </div>
         </div>
-    </div>
+
+        <div style={{ ...styles.bottomFooter }}>
+          <b>© {new Date().getFullYear()} Shift IOU. <div style={styles.footerLineMuted}>v.{APP_VERSION}</div></b>
+        </div>
+      </div>
     </div>
   );
 }
@@ -352,21 +491,20 @@ const styles = {
     padding: 16,
     background: "#f5f5f7",
   },
+  stack: { width: "100%", maxWidth: 460 },
   card: {
     width: "100%",
-    maxWidth: 460,
     background: "white",
     borderRadius: 16,
     padding: 18,
     boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
   },
   title: {
-  margin: "0 0 16px",
-  fontSize: 42,
-  fontWeight: 750,
-  letterSpacing: "-0.01em",
-},
-
+    margin: "0 0 12px",
+    fontSize: 42,
+    fontWeight: 750,
+    letterSpacing: "-0.01em",
+  },
 
   segment: {
     display: "flex",
@@ -374,7 +512,7 @@ const styles = {
     border: "1px solid #ddd",
     borderRadius: 999,
     overflow: "hidden",
-    marginBottom: 14,
+    marginBottom: 10,
   },
   segmentBtn: {
     flex: 1,
@@ -386,6 +524,16 @@ const styles = {
     whiteSpace: "nowrap",
   },
   segmentBtnActive: { background: "#111", color: "white" },
+
+  trustRow: { display: "flex", gap: 8, marginBottom: 12 },
+  trustPill: {
+    fontSize: 12,
+    border: "1px solid #eee",
+    background: "#fafafa",
+    color: "#333",
+    padding: "6px 10px",
+    borderRadius: 999,
+  },
 
   form: { display: "flex", flexDirection: "column", gap: 12 },
   label: { display: "flex", flexDirection: "column", gap: 6, fontSize: 14 },
@@ -426,7 +574,6 @@ const styles = {
     background: "white",
   },
 
-
   btn: {
     marginTop: 4,
     padding: "10px 12px",
@@ -446,6 +593,23 @@ const styles = {
     fontSize: 16,
   },
 
+  linkBtn: {
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    margin: 0,
+    cursor: "pointer",
+    color: "#444",
+    fontSize: 13,
+    textDecoration: "underline",
+  },
+  secondaryLinks: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 10,
+    marginTop: 4,
+  },
+
   helpBlock: {
     background: "#f7f7f9",
     border: "1px solid #eee",
@@ -455,6 +619,24 @@ const styles = {
     color: "#333",
     lineHeight: 1.4,
   },
+  muted: { color: "#666" },
+
+  legal: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#666",
+    lineHeight: 1.4,
+  },
+
+  sentBox: {
+    border: "1px solid #eee",
+    background: "#fafafa",
+    borderRadius: 12,
+    padding: 12,
+  },
+  sentTitle: { fontSize: 14, fontWeight: 700, marginBottom: 6, color: "#111" },
+  sentText: { fontSize: 13, color: "#333", lineHeight: 1.4 },
+  sentActions: { display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" },
 
   err: {
     background: "#ffe9e9",
@@ -472,5 +654,10 @@ const styles = {
     color: "#14532d",
     fontSize: 14,
   },
-  help: { marginTop: 12, fontSize: 12, color: "#666", lineHeight: 1.4 },
+
+  footerHelp: { marginTop: 14, fontSize: 12, color: "#666", lineHeight: 1.4 },
+  footerLine: { marginBottom: 6 },
+  footerLineMuted: { color: "#888" },
+
+  bottomFooter: { textAlign: "center", marginTop: 12, fontSize: 12, color: "#666" },
 };

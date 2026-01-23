@@ -1,6 +1,7 @@
 // src/components/CalendarView.jsx
-import { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useEffect, useState } from "react";
 import { supabase } from "../supabaseClient";
+import DayDetailModal from "./DayDetailModal";
 
 /* =========================================================
    Date helpers (YYYY-MM-DD)
@@ -64,21 +65,6 @@ function rosterPillClass(letter) {
   return "bg-slate-100 text-slate-500 border-slate-200";
 }
 
-function dayNightPillClass(kind) {
-  // kind: "DAY" | "NIGHT"
-  if (kind === "DAY") return "bg-rose-100 text-rose-800 border-rose-200";
-  if (kind === "NIGHT") return "bg-sky-100 text-sky-800 border-sky-200";
-  return "bg-slate-100 text-slate-700 border-slate-200";
-}
-
-function standbyPillClass(kind) {
-  // kind: "SBYA" | "SBY_DAY" | "SBY_NIGHT"
-  if (kind === "SBYA") return "bg-emerald-100 text-emerald-800 border-emerald-200";
-  if (kind === "SBY_DAY") return "bg-orange-100 text-orange-800 border-orange-200";
-  if (kind === "SBY_NIGHT") return "bg-orange-100 text-orange-800 border-orange-200";
-  return "bg-slate-100 text-slate-700 border-slate-200";
-}
-
 /* =========================================================
    Month input helpers
 ========================================================= */
@@ -93,7 +79,8 @@ function fromMonthValue(v) {
   const [yy, mm] = String(v).split("-");
   const y = Number(yy);
   const m = Number(mm);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || y < 1900 || m < 1 || m > 12) return null;
+  if (!Number.isFinite(y) || !Number.isFinite(m) || y < 1900 || m < 1 || m > 12)
+    return null;
   return new Date(y, m - 1, 1);
 }
 
@@ -104,6 +91,7 @@ function fromMonthValue(v) {
    - mode: "shift" | "mine"
    - homePlatoon: "A"|"B"|"C"|"D"|""
    - onSelectStandby: (standbyRow) => void
+   - onAddStandby?: ({ shift_date }) => void
    - onGoSettings?: () => void
 ========================================================= */
 export default function CalendarView({
@@ -111,12 +99,18 @@ export default function CalendarView({
   mode = "shift",
   homePlatoon = "",
   onSelectStandby,
+  onAddStandby,
   onGoSettings,
 }) {
   const [cursorMonth, setCursorMonth] = useState(() => new Date());
   const [loading, setLoading] = useState(false);
   const [rosterRows, setRosterRows] = useState([]);
   const [standbyRows, setStandbyRows] = useState([]);
+
+  // Day detail modal state (works for both modes)
+  const [dayOpen, setDayOpen] = useState(false);
+  const [selectedDateObj, setSelectedDateObj] = useState(null); // Date
+  const [selectedDateKey, setSelectedDateKey] = useState(""); // YYYY-MM-DD
 
   const home = clampPlatoonLetter(homePlatoon);
   const needsHomePlatoon = mode === "mine" && !home;
@@ -147,6 +141,7 @@ export default function CalendarView({
 
   /* -----------------------------
      Roster lookup by date
+     rosterRows shape from RPC: { date, day_platoon, night_platoon }
   ----------------------------- */
   const rosterByDate = useMemo(() => {
     const m = new Map();
@@ -162,7 +157,7 @@ export default function CalendarView({
   }, [rosterRows]);
 
   /* -----------------------------
-     Standby lookup by date (for My Calendar overlay)
+     Standby lookup by date (for My Calendar)
   ----------------------------- */
   const standbysByDate = useMemo(() => {
     const m = new Map();
@@ -190,10 +185,13 @@ export default function CalendarView({
         const end = ymd(grid.gridEnd);
 
         // 1) roster via RPC
-        const { data: rosterData, error: rosterErr } = await supabase.rpc("get_roster_code_range", {
-          p_start: start,
-          p_end: end,
-        });
+        const { data: rosterData, error: rosterErr } = await supabase.rpc(
+          "get_roster_code_range",
+          {
+            p_start: start,
+            p_end: end,
+          }
+        );
 
         if (!cancelled) {
           if (rosterErr) {
@@ -250,17 +248,66 @@ export default function CalendarView({
     setCursorMonth(new Date());
   }
 
+  function openDayModal(d) {
+    const key = ymd(d);
+    setSelectedDateObj(new Date(d));
+    setSelectedDateKey(key);
+    setDayOpen(true);
+  }
+
   const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  const selectedRoster = selectedDateKey
+    ? rosterByDate.get(selectedDateKey) || { day: "", night: "" }
+    : { day: "", night: "" };
+
+  const selectedStandbys = selectedDateKey
+    ? standbysByDate.get(selectedDateKey) || []
+    : [];
+
+  // Shared chip styles for My Calendar
+  const chipBase = [
+  "flex items-center justify-center",
+  "w-full",                       // ✅ always matches lane width
+  "min-w-0",                      // ✅ allows shrinking
+  "px-1.5 py-0.5",                // tighter padding
+  "text-[9px] font-extrabold",
+  "rounded-full border leading-none",
+  "whitespace-nowrap overflow-hidden text-ellipsis", // ✅ truncate safely
+].join(" ");
 
   return (
     <div>
+      {/* Day modal (both modes) */}
+      {dayOpen && selectedDateObj ? (
+        <DayDetailModal
+          mode={mode}
+          dateObj={selectedDateObj}
+          dateKey={selectedDateKey}
+          roster={selectedRoster}
+          home={home}
+          standbysHere={mode === "mine" ? selectedStandbys : []}
+          onPickStandby={(row) => {
+            setDayOpen(false);
+            onSelectStandby?.(row);
+          }}
+          onAddStandby={(payload) => {
+            setDayOpen(false);
+            onAddStandby?.(payload);
+          }}
+          onClose={() => setDayOpen(false)}
+        />
+      ) : null}
+
       {/* prompt if home platoon missing */}
       {needsHomePlatoon && (
         <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-4">
           <div className="text-sm font-extrabold text-amber-900">
             Set your Home Platoon to use “My calendar”
           </div>
-          <div className="mt-1 text-sm text-amber-900/80">Go to Settings → Home platoon, then come back.</div>
+          <div className="mt-1 text-sm text-amber-900/80">
+            Go to Settings → Home platoon, then come back.
+          </div>
           <div className="mt-3">
             <button
               type="button"
@@ -274,249 +321,253 @@ export default function CalendarView({
       )}
 
       {/* Header */}
-      <div className="mb-3 space-y-2">
-        <div className="text-2xl font-extrabold text-slate-900 text-center">{monthLabel(cursorMonth)}</div>
+      <div className="sticky top-0 z-10 bg-white pb-3">
+        <div className="pt-1 space-y-2">
+          <div className="text-2xl font-extrabold text-slate-900 text-center">
+            {monthLabel(cursorMonth)}
+          </div>
 
-        {mode === "mine" && home && (
-          <div className="mt-1 text-center text-xs text-slate-500">Viewing {home} Platoon’s pattern</div>
-        )}
+          {mode === "mine" && home && (
+            <div className="mt-1 text-center text-xs text-slate-500">
+              Viewing {home} Platoon’s pattern
+            </div>
+          )}
 
-        <div className="flex items-center justify-center gap-2">
-          <input
-            type="month"
-            value={toMonthValue(cursorMonth)}
-            onChange={(e) => {
-              const next = fromMonthValue(e.target.value);
-              if (next) setCursorMonth(next);
-            }}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-          />
+          <div className="flex items-center justify-center gap-2">
+            <input
+              type="month"
+              value={toMonthValue(cursorMonth)}
+              onChange={(e) => {
+                const next = fromMonthValue(e.target.value);
+                if (next) setCursorMonth(next);
+              }}
+              className="h-10 rounded-md border border-slate-200 bg-white text-slate-900 px-3 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            />
 
-          <button
-            type="button"
-            onClick={goToday}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-          >
-            Today
-          </button>
+            <button
+              type="button"
+              onClick={goToday}
+              className="h-10 rounded-md border border-slate-200 bg-white text-slate-900 px-3 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+            >
+              Today
+            </button>
 
-          <button
-            type="button"
-            onClick={goPrevMonth}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-            aria-label="Previous month"
-            title="Previous month"
-          >
-            ‹
-          </button>
+            <button
+              type="button"
+              onClick={goPrevMonth}
+              className="h-10 rounded-md border border-slate-200 bg-white text-slate-900 px-3 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+              aria-label="Previous month"
+              title="Previous month"
+            >
+              ‹
+            </button>
 
-          <button
-            type="button"
-            onClick={goNextMonth}
-            className="rounded-md border border-slate-200 bg-white text-slate-900 px-3 py-2 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
-            aria-label="Next month"
-            title="Next month"
-          >
-            ›
-          </button>
+            <button
+              type="button"
+              onClick={goNextMonth}
+              className="h-10 rounded-md border border-slate-200 bg-white text-slate-900 px-3 text-sm font-semibold hover:bg-slate-50 active:scale-[0.99] transition"
+              aria-label="Next month"
+              title="Next month"
+            >
+              ›
+            </button>
+          </div>
+
+          {loading && (
+            <div className="text-sm text-slate-500 text-center">Loading…</div>
+          )}
         </div>
       </div>
 
-      {loading && <div className="text-sm text-slate-500 mb-2">Loading…</div>}
-
       <div className="rounded-md border border-slate-200 bg-white overflow-hidden">
         {/* Weekday header */}
-        <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
-          {weekdayLabels.map((w) => (
-            <div key={w} className="py-2 text-[11px] font-extrabold text-slate-600 uppercase text-center">
-              {w}
-            </div>
-          ))}
+        <div className="bg-slate-200">
+          <div className="grid grid-cols-7 gap-px bg-slate-200">
+            {weekdayLabels.map((w) => (
+              <div
+                key={w}
+                className="bg-slate-50 py-2 text-[11px] font-extrabold text-slate-600 uppercase text-center"
+              >
+                {w}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Days grid */}
-        <div className="grid grid-cols-7">
-          {grid.days.map((d) => {
-            const key = ymd(d);
-            const inMonth = d.getMonth() === cursorMonth.getMonth();
-            const today = isToday(d);
-            const roster = rosterByDate.get(key) || { day: "", night: "" };
+        <div className="bg-slate-200">
+          <div className="grid grid-cols-7 gap-px bg-slate-200">
+            {grid.days.map((d) => {
+              const key = ymd(d);
+              const inMonth = d.getMonth() === cursorMonth.getMonth();
+              const today = isToday(d);
+              const roster = rosterByDate.get(key) || { day: "", night: "" };
 
-            // =====================================================
-            // SHIFT CALENDAR (platoon letters)
-            // =====================================================
-            if (mode === "shift") {
               return (
-                <div
+                <button
                   key={key}
+                  type="button"
+                  onClick={() => openDayModal(d)}
                   className={[
-                    "min-h-[92px] border-b border-slate-200 border-r border-slate-200 last:border-r-0",
+                    "min-h-[84px] p-1.5 text-left overflow-hidden",
                     inMonth ? "bg-white" : "bg-slate-50",
                     today ? "ring-2 ring-slate-900 ring-inset" : "",
+                    "hover:bg-slate-50 active:scale-[0.995] transition",
                   ].join(" ")}
+                  title="Tap to view day details"
                 >
-                  <div className={["text-xl font-bold text-center", inMonth ? "text-slate-900" : "text-slate-400"].join(" ")}>
-                    {dayNum(d)}
-                  </div>
+                  {/* =====================================================
+                      SHIFT CALENDAR (platoon letters)
+                  ===================================================== */}
+                  {mode === "shift" ? (
+                    <>
+                      <div
+                        className={[
+                          "text-[15px] font-medium text-center leading-none",
+                          inMonth ? "text-slate-900" : "text-slate-400",
+                        ].join(" ")}
+                      >
+                        {dayNum(d)}
+                      </div>
 
-                  <div className="mt-2 flex items-center justify-between gap-2 px-1">
-                    <span
-                      className={[
-                        "inline-flex items-center justify-center w-10 h-8 rounded-full border text-sm font-medium",
-                        rosterPillClass(roster.day),
-                        !roster.day ? "opacity-50" : "",
-                      ].join(" ")}
-                      title={roster.day ? `Day: ${roster.day} Platoon` : "Day: —"}
-                    >
-                      {roster.day || "—"}
-                    </span>
+                      <div className="mt-2 flex items-center justify-between gap-2 px-1">
+                        <span
+                          className={[
+                            "inline-flex items-center justify-center w-10 h-8 rounded-full border text-sm font-medium",
+                            rosterPillClass(roster.day),
+                            !roster.day ? "opacity-50" : "",
+                          ].join(" ")}
+                          title={roster.day ? `Day: ${roster.day} Platoon` : "Day: —"}
+                        >
+                          {roster.day || "—"}
+                        </span>
 
-                    <span
-                      className={[
-                        "inline-flex items-center justify-center w-10 h-8 rounded-full border text-sm font-medium",
-                        rosterPillClass(roster.night),
-                        !roster.night ? "opacity-50" : "",
-                      ].join(" ")}
-                      title={roster.night ? `Night: ${roster.night} Platoon` : "Night: —"}
-                    >
-                      {roster.night || "—"}
-                    </span>
-                  </div>
-                </div>
+                        <span
+                          className={[
+                            "inline-flex items-center justify-center w-10 h-8 rounded-full border text-sm font-medium",
+                            rosterPillClass(roster.night),
+                            !roster.night ? "opacity-50" : "",
+                          ].join(" ")}
+                          title={
+                            roster.night ? `Night: ${roster.night} Platoon` : "Night: —"
+                          }
+                        >
+                          {roster.night || "—"}
+                        </span>
+                      </div>
+                    </>
+                  ) : null}
+
+                  {/* =====================================================
+                      MY CALENDAR (3 lanes: date / day / night)
+                      - max 2 pills total (one per lane)
+                      - if SBYA exists for lane, hide roster pill
+                  ===================================================== */}
+                  {mode === "mine" ? (() => {
+                    const standbysHere = standbysByDate.get(key) || [];
+
+                    // Pick ONE standby per lane (prioritise SBYA over SBY)
+                    const daySBYA = standbysHere.find(
+                      (s) =>
+                        !s?.deleted_at &&
+                        s?.worked_for_me === true &&
+                        String(s.shift_type || "").trim().toLowerCase() === "day"
+                    );
+                    const nightSBYA = standbysHere.find(
+                      (s) =>
+                        !s?.deleted_at &&
+                        s?.worked_for_me === true &&
+                        String(s.shift_type || "").trim().toLowerCase() === "night"
+                    );
+
+                    const daySBY = standbysHere.find(
+                      (s) =>
+                        !s?.deleted_at &&
+                        s?.worked_for_me === false &&
+                        String(s.shift_type || "").trim().toLowerCase() === "day"
+                    );
+                    const nightSBY = standbysHere.find(
+                      (s) =>
+                        !s?.deleted_at &&
+                        s?.worked_for_me === false &&
+                        String(s.shift_type || "").trim().toLowerCase() === "night"
+                    );
+
+                    const youHaveDay = home && roster.day === home;
+                    const youHaveNight = home && roster.night === home;
+
+                    const dayChip = daySBYA
+                      ? {
+                          text: "SBYA",
+                          cls: "bg-emerald-100 text-emerald-800 border-emerald-200",
+                        }
+                      : daySBY
+                      ? {
+                          text: "SBY",
+                          cls: "bg-orange-100 text-orange-800 border-orange-200",
+                        }
+                      : youHaveDay
+                      ? {
+                          text: "Day",
+                          cls: "bg-rose-100 text-rose-800 border-rose-200",
+                        }
+                      : null;
+
+                    const nightChip = nightSBYA
+                      ? {
+                          text: "SBYA",
+                          cls: "bg-emerald-100 text-emerald-800 border-emerald-200",
+                        }
+                      : nightSBY
+                      ? {
+                          text: "SBY",
+                          cls: "bg-orange-100 text-orange-800 border-orange-200",
+                        }
+                      : youHaveNight
+                      ? {
+                          text: "Night",
+                          cls: "bg-sky-100 text-sky-800 border-sky-200",
+                        }
+                      : null;
+
+                    return (
+                      <div className="h-full grid grid-rows-[22px_1fr_1fr]">
+                        {/* TOP lane: date */}
+                        <div
+                          className={[
+                            "text-[15px] font-medium text-center leading-none",
+                            inMonth ? "text-slate-900" : "text-slate-400",
+                          ].join(" ")}
+                        >
+                          {dayNum(d)}
+                        </div>
+
+                        {/* MIDDLE lane: Day */}
+<div className="flex items-center justify-center w-full px-1 min-w-0">
+
+                          {dayChip ? (
+                            <span className={`${chipBase} ${dayChip.cls}`}>
+                              {dayChip.text}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        {/* BOTTOM lane: Night */}
+<div className="flex items-center justify-center w-full px-1 min-w-0">
+
+                          {nightChip ? (
+                            <span className={`${chipBase} ${nightChip.cls}`}>
+                              {nightChip.text}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })() : null}
+                </button>
               );
-            }
-
-            // =====================================================
-            // MY CALENDAR (home platoon + standby overlay)
-            // =====================================================
-            const standbysHere = standbysByDate.get(key) || [];
-
-            const dayStandby = standbysHere.find(
-              (s) =>
-                !s?.deleted_at && String(s.shift_type || "").trim().toLowerCase() === "day"
-            );
-
-            const nightStandby = standbysHere.find(
-              (s) =>
-                !s?.deleted_at && String(s.shift_type || "").trim().toLowerCase() === "night"
-            );
-
-            const youHaveDay = home && roster.day === home;
-            const youHaveNight = home && roster.night === home;
-
-            // ✅ SBYA = "they work for me" (worked_for_me === true) AND shift type matches.
-            // We use .some() so it works even if there are multiple entries on the same date.
-            const dayHasSBYA = standbysHere.some(
-              (s) =>
-                !s?.deleted_at &&
-                s?.worked_for_me === true &&
-                String(s.shift_type || "").trim().toLowerCase() === "day"
-            );
-
-            const nightHasSBYA = standbysHere.some(
-              (s) =>
-                !s?.deleted_at &&
-                s?.worked_for_me === true &&
-                String(s.shift_type || "").trim().toLowerCase() === "night"
-            );
-
-            // Click priority: an SBYA on this date (most important), else whatever exists
-            const clickableStandby =
-              standbysHere.find((s) => !s?.deleted_at && s?.worked_for_me === true) ||
-              dayStandby ||
-              nightStandby;
-
-            const hasClickHandler = typeof onSelectStandby === "function";
-            const canClick = Boolean(clickableStandby && hasClickHandler);
-
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => {
-                  if (!hasClickHandler) return;
-                  if (!clickableStandby) return;
-                  onSelectStandby(clickableStandby);
-                }}
-                className={[
-                  "min-h-[88px] border-b border-slate-200 border-r border-slate-200 last:border-r-0",
-                  "p-1.5 text-left overflow-hidden",
-                  inMonth ? "bg-white" : "bg-slate-50",
-                  today ? "ring-2 ring-slate-900 ring-inset" : "",
-                  canClick ? "hover:bg-slate-50 active:scale-[0.995] transition" : "cursor-default",
-                ].join(" ")}
-                title={canClick ? "Tap to view standby" : undefined}
-              >
-                <div
-                  className={[
-                    "text-[15px] font-medium text-center leading-none",
-                    inMonth ? "text-slate-900" : "text-slate-400",
-                  ].join(" ")}
-                >
-                  {dayNum(d)}
-                </div>
-
-                {/* fixed vertical lanes */}
-                <div className="relative mt-1.5 h-[56px]">
-                  {/* DAY lane */}
-                  <div className="absolute left-0 right-0 top-0 flex justify-center">
-                    <div className="flex flex-col items-center gap-1">
-                      {youHaveDay && (
-                        <span
-                          className={[
-                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[9px] font-semibold rounded-full border leading-none",
-                            dayNightPillClass("DAY"),
-                            dayHasSBYA ? "line-through opacity-40" : "",
-                          ].join(" ")}
-                        >
-                          Day
-                        </span>
-                      )}
-
-                      {dayStandby && (
-                        <span
-                          className={[
-                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[9px] font-semibold rounded-full border leading-none",
-                            standbyPillClass(dayStandby.worked_for_me ? "SBYA" : "SBY_DAY"),
-                          ].join(" ")}
-                        >
-                          {dayStandby.worked_for_me ? "SBYA(DS)" : "SBY(DS)"}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* NIGHT lane */}
-                  <div className="absolute left-0 right-0 bottom-0 flex justify-center">
-                    <div className="flex flex-col items-center gap-1">
-                      {youHaveNight && (
-                        <span
-                          className={[
-                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[9px] font-semibold rounded-full border leading-none",
-                            dayNightPillClass("NIGHT"),
-                            nightHasSBYA ? "line-through opacity-60" : "",
-                          ].join(" ")}
-                        >
-                          Night
-                        </span>
-                      )}
-
-                      {nightStandby && (
-                        <span
-                          className={[
-                            "inline-flex items-center justify-center w-12 sm:w-14 px-2 py-0.5 text-[9px] font-semibold rounded-full border leading-none",
-                            standbyPillClass(nightStandby.worked_for_me ? "SBYA" : "SBY_NIGHT"),
-                          ].join(" ")}
-                        >
-                          {nightStandby.worked_for_me ? "SBYA(NS)" : "SBY(NS)"}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
+            })}
+          </div>
         </div>
       </div>
     </div>
