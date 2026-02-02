@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useOppositeCandidates, buildOppositePersonOptions } from "../hooks/useOppositeCandidates";
-import { toTitleCase } from "../helpers";
+import { toTitleCase, normalizeName } from "../helpers";
+import { appendNoteToIds, renameStandbyPerson } from "../services/settlements";
+
 
 /**
  * AddStandbyModal
@@ -27,6 +29,13 @@ export default function AddStandbyModal({
   settleWithPersonLabel = "",
 }) {
   const f = form || {};
+
+    // ---- Name mismatch barrier for "settle existing" flow ----
+  const [mismatchOpen, setMismatchOpen] = useState(false);
+  const [mismatchChoice, setMismatchChoice] = useState(null); // "threeWay" | "typo" | "other" | null
+  const [mismatchNote, setMismatchNote] = useState("");
+  const [mismatchCandidate, setMismatchCandidate] = useState(null); // candidate row {id, person_name, ...}
+
 
   const safeBundleOptions = Array.isArray(bundleOptions) ? bundleOptions : [];
 
@@ -154,7 +163,7 @@ export default function AddStandbyModal({
       settle_existing: next,
       settle_target_oldest_id: "",
     });
-
+    resetMismatch();
     if (next) {
       await fetchOppositeCandidates(wantWorkedForMe);
     }
@@ -163,10 +172,12 @@ export default function AddStandbyModal({
   useEffect(() => {
     if (!settleWithStandbyId && settleExisting) {
       safeChange({ settle_target_oldest_id: "" });
+      resetMismatch();
       fetchOppositeCandidates(wantWorkedForMe);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worked_for_me]);
+
 
   // ✅ Grouping only allowed when THEY work for me (worked_for_me=true)
   const groupingAllowed = worked_for_me === true;
@@ -184,7 +195,63 @@ export default function AddStandbyModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupingAllowed]);
 
-  function handleSubmit(e) {
+  function resetMismatch() {
+    setMismatchOpen(false);
+    setMismatchChoice(null);
+    setMismatchNote("");
+    setMismatchCandidate(null);
+  }
+
+  function handlePickSettleTarget(candidateId) {
+    safeChange({ settle_target_oldest_id: candidateId });
+
+    // Clear prior mismatch state each time user changes selection
+    resetMismatch();
+
+    const candidate =
+      (oppositeCandidates || []).find((c) => String(c.id) === String(candidateId)) || null;
+    if (!candidateId || !candidate) return;
+
+    const typed = String(f?.person_name || "").trim();
+    const picked = String(candidate?.person_name || "").trim();
+
+    // If name is blank, just adopt the selected person's name (best UX)
+    if (!typed && picked) {
+      safeChange({ person_name: picked });
+      return;
+    }
+
+    const a = normalizeName(typed);
+    const b = normalizeName(picked);
+    const mismatch = a && b && a !== b;
+
+    if (mismatch) {
+      setMismatchCandidate(candidate);
+      setMismatchOpen(true);
+      return;
+    }
+
+    // No mismatch: ensure we don't carry any previous 3-way flag
+    safeChange({ settle_three_way: false });
+  }
+
+  function chooseMismatchTypo() {
+    setMismatchChoice("typo");
+    safeChange({ settle_three_way: false });
+  }
+
+  function chooseMismatchThreeWay() {
+    setMismatchChoice("threeWay");
+    safeChange({ settle_three_way: true });
+  }
+
+  function chooseMismatchOther() {
+    setMismatchChoice("other");
+    safeChange({ settle_three_way: false });
+  }
+
+
+    async function handleSubmit(e) {
     // Settlement guards
     if (settleWithStandbyId) {
       if (!confirmSettleWithTarget) {
@@ -198,6 +265,56 @@ export default function AddStandbyModal({
         e.preventDefault();
         alert("Select who to settle against.");
         return;
+      }
+            // ---- Name mismatch barrier (settle existing) ----
+      if (mismatchOpen && mismatchCandidate?.id) {
+        if (!mismatchChoice) {
+          e.preventDefault();
+          alert("These shifts have different names — choose an option to continue.");
+          return;
+        }
+
+        if (mismatchChoice === "other") {
+          const note = String(mismatchNote || "").trim();
+          if (!note) {
+            e.preventDefault();
+            alert("Please add a note for 'Other reason'.");
+            return;
+          }
+
+          // Add note to the EXISTING row now; we also encourage user to add context to the new row via Notes if desired.
+          const res = await appendNoteToIds([mismatchCandidate.id], note);
+          if (!res?.ok) {
+            e.preventDefault();
+            alert("Could not add note. Check console.");
+            return;
+          }
+        }
+
+        if (mismatchChoice === "typo") {
+          const typed = String(f?.person_name || "").trim();
+          if (!typed) {
+            e.preventDefault();
+            alert("Enter the correct name first.");
+            return;
+          }
+
+          // Rename the EXISTING target to match the typed name (only at submit time)
+          const before = toTitleCase(mismatchCandidate?.person_name || "—");
+          const after = toTitleCase(typed);
+
+          const resRename = await renameStandbyPerson(mismatchCandidate.id, typed);
+          if (!resRename?.ok) {
+            e.preventDefault();
+            alert("Could not rename. Check console.");
+            return;
+          }
+
+          await appendNoteToIds(
+            [mismatchCandidate.id],
+            `Name corrected during settlement: "${before}" → "${after}"`
+          );
+        }
       }
       safeChange({ settle_with_standby_id: null });
     } else {
@@ -545,7 +662,7 @@ export default function AddStandbyModal({
 
                 <select
                   value={f.settle_target_oldest_id || ""}
-                  onChange={(e) => safeChange({ settle_target_oldest_id: e.target.value })}
+                  onChange={(e) => handlePickSettleTarget(e.target.value)}
                   className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
                   disabled={loadingOpposite}
                 >
@@ -556,6 +673,74 @@ export default function AddStandbyModal({
                     </option>
                   ))}
                 </select>
+                {mismatchOpen && mismatchCandidate ? (
+  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-3 space-y-2">
+    <div className="text-sm font-extrabold text-amber-900">
+      These shifts have different names.
+    </div>
+
+    <div className="text-xs font-medium text-amber-800">
+      This may be a typo, or a 3-way standby between{" "}
+      <span className="font-bold">
+        {toTitleCase(f.person_name || "—")}, {toTitleCase(mismatchCandidate.person_name || "—")} and you
+      </span>
+      .
+    </div>
+
+    <div className="flex flex-wrap gap-2">
+      <button
+        type="button"
+        onClick={chooseMismatchTypo}
+        className={
+          "rounded-md px-3 py-2 text-sm font-semibold transition active:scale-[0.99] " +
+          (mismatchChoice === "typo"
+            ? "bg-slate-900 text-white"
+            : "border border-slate-200 bg-white text-slate-900 hover:bg-slate-50")
+        }
+      >
+        Same person (typo)
+      </button>
+
+      <button
+        type="button"
+        onClick={chooseMismatchThreeWay}
+        className={
+          "rounded-md px-3 py-2 text-sm font-semibold transition active:scale-[0.99] " +
+          (mismatchChoice === "threeWay"
+            ? "bg-slate-900 text-white"
+            : "border border-slate-200 bg-white text-slate-900 hover:bg-slate-50")
+        }
+      >
+        3-way standby
+      </button>
+
+      <button
+        type="button"
+        onClick={chooseMismatchOther}
+        className={
+          "rounded-md px-3 py-2 text-sm font-semibold transition active:scale-[0.99] " +
+          (mismatchChoice === "other"
+            ? "bg-slate-900 text-white"
+            : "border border-slate-200 bg-white text-slate-900 hover:bg-slate-50")
+        }
+      >
+        Other reason
+      </button>
+    </div>
+
+    {mismatchChoice === "other" ? (
+      <div className="space-y-2 pt-1">
+        <textarea
+          value={mismatchNote}
+          onChange={(e) => setMismatchNote(e.target.value)}
+          className="w-full min-h-[70px] rounded-md border border-amber-200 bg-white text-slate-900 px-3 py-2 text-sm"
+          placeholder="Add a note to explain why the names are different."
+        />
+      </div>
+    ) : null}
+  </div>
+) : null}
+
               </div>
             ) : null}
           </>

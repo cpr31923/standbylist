@@ -69,50 +69,63 @@ export default function DayDetailModal({
         String(s.shift_type || "").trim().toLowerCase() === "night"
     );
 
-    const youHaveDay = mode === "mine" && homePlatoon && safeRoster.day === homePlatoon;
-    const youHaveNight = mode === "mine" && homePlatoon && safeRoster.night === homePlatoon;
+    const youHaveDay =
+      mode === "mine" && homePlatoon && safeRoster.day === homePlatoon;
+    const youHaveNight =
+      mode === "mine" && homePlatoon && safeRoster.night === homePlatoon;
 
     // Helper: choose display platoon for a standby row
     const standbyPlatoonLabel = (row) => {
-      const p = String(row?.duty_platoon || row?.platoon || "").trim().toUpperCase();
+      const p = String(row?.duty_platoon || row?.platoon || "")
+        .trim()
+        .toUpperCase();
       return p ? `${p} Platoon` : "—";
     };
 
-    // Helper: shift label
+    // Helper: shift label (kept for future use / clarity)
     const shiftLabel = (shiftType) =>
-      String(shiftType || "").trim().toLowerCase() === "night" ? "Night shift" : "Day shift";
+      String(shiftType || "").trim().toLowerCase() === "night"
+        ? "Night shift"
+        : "Day shift";
+
+    // Helper: SBYA message
+    const sbyaMessage = (row) => {
+      const name = String(row?.person_name || "").trim();
+      return name ? `${name} is working a standby for you` : "Someone is working a standby for you";
+    };
 
     // 1) Day lane
     if (mode === "mine") {
       // Base roster shift (if you are rostered on)
-if (youHaveDay) {
-  // If SBYA exists, ONLY show the base shift struck-through.
-  // Make it clickable to open the SBYA standby detail.
-  out.push({
-    kind: "roster",
-    lane: "day",
-    title: `Day shift — ${homePlatoon} Platoon`,
-    struck: !!daySBYA,
-    pill: daySBYA ? "SBYA" : null,
-    // NEW: click-through target
-    pickRow: daySBYA || null,
-  });
-}
+      if (youHaveDay) {
+        // If SBYA exists, ONLY show the base shift struck-through.
+        // Make it clickable to open the SBYA standby detail.
+        out.push({
+          kind: "roster",
+          lane: "day",
+          title: `Day shift — ${homePlatoon} Platoon`,
+          struck: !!daySBYA,
+          pill: daySBYA ? "SBYA" : null,
+          pickRow: daySBYA || null,
+          sbyaRow: daySBYA || null,
+          sbyaText: daySBYA ? sbyaMessage(daySBYA) : null,
+        });
+      }
 
-// Standby event on Day:
-// - If it's SBYA: do NOT show a second card (handled via roster card above)
-// - If it's SBY: show it as its own card
-if (daySBY) {
-  const row = daySBY;
-  const name = String(row?.person_name || "—").trim();
-  out.push({
-    kind: "standby",
-    lane: "day",
-    row,
-    title: `Day shift — ${name} — ${standbyPlatoonLabel(row)}`,
-    pill: "SBY",
-  });
-}
+      // Standby event on Day:
+      // - If it's SBYA: do NOT show a second card (handled via roster card above)
+      // - If it's SBY: show it as its own card
+      if (daySBY) {
+        const row = daySBY;
+        const name = String(row?.person_name || "—").trim();
+        out.push({
+          kind: "standby",
+          lane: "day",
+          row,
+          title: `Day shift — ${name} — ${standbyPlatoonLabel(row)}`,
+          pill: "SBY",
+        });
+      }
     } else {
       // Shift reference calendar
       out.push({
@@ -125,27 +138,29 @@ if (daySBY) {
     // 2) Night lane
     if (mode === "mine") {
       if (youHaveNight) {
-  out.push({
-    kind: "roster",
-    lane: "night",
-    title: `Night shift — ${homePlatoon} Platoon`,
-    struck: !!nightSBYA,
-    pill: nightSBYA ? "SBYA" : null,
-    pickRow: nightSBYA || null,
-  });
-}
+        out.push({
+          kind: "roster",
+          lane: "night",
+          title: `Night shift — ${homePlatoon} Platoon`,
+          struck: !!nightSBYA,
+          pill: nightSBYA ? "SBYA" : null,
+          pickRow: nightSBYA || null,
+          sbyaRow: nightSBYA || null,
+          sbyaText: nightSBYA ? sbyaMessage(nightSBYA) : null,
+        });
+      }
 
-if (nightSBY) {
-  const row = nightSBY;
-  const name = String(row?.person_name || "—").trim();
-  out.push({
-    kind: "standby",
-    lane: "night",
-    row,
-    title: `Night shift — ${name} — ${standbyPlatoonLabel(row)}`,
-    pill: "SBY",
-  });
-}
+      if (nightSBY) {
+        const row = nightSBY;
+        const name = String(row?.person_name || "—").trim();
+        out.push({
+          kind: "standby",
+          lane: "night",
+          row,
+          title: `Night shift — ${name} — ${standbyPlatoonLabel(row)}`,
+          pill: "SBY",
+        });
+      }
     } else {
       out.push({
         kind: "ref",
@@ -244,18 +259,31 @@ if (nightSBY) {
             return (
               <Card
                 key={`roster-${it.lane}-${idx}`}
-                onClick={clickable ? () => onPickStandby?.(it.pickRow) : undefined}
+                onClick={
+                  clickable ? () => onPickStandby?.(it.pickRow) : undefined
+                }
                 disabled={!clickable}
               >
-                <div className="flex items-center justify-between gap-3">
-                  <div
-                    className={[
-                      "text-sm font-extrabold text-slate-900",
-                      it.struck ? "line-through opacity-50" : "",
-                    ].join(" ")}
-                  >
-                    {it.title}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div
+                      className={[
+                        "text-sm font-extrabold text-slate-900",
+                        it.struck ? "line-through opacity-50" : "",
+                      ].join(" ")}
+                    >
+                      {it.title}
+                    </div>
+
+                    {it.struck && it.sbyaRow ? (
+                      <div className="mt-1 text-sm font-semibold text-slate-900">
+                        {String(it.sbyaRow?.person_name || "").trim() ||
+                          "Someone"}{" "}
+                        is working a standby for you
+                      </div>
+                    ) : null}
                   </div>
+
                   {it.pill ? <Pill text={it.pill} /> : null}
                 </div>
               </Card>
@@ -283,7 +311,7 @@ if (nightSBY) {
           <button
             type="button"
             onClick={() => onAddStandby?.({ shift_date: dateKey })}
-                className="mt-4 w-full rounded-md bg-slate-900 text-white px-3 py-2 text-s font-medium hover:bg-slate-800 active:scale-[0.99] transition"
+            className="mt-4 w-full rounded-md bg-slate-900 text-white px-3 py-2 text-s font-medium hover:bg-slate-800 active:scale-[0.99] transition"
           >
             Add standby
           </button>

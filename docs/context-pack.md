@@ -148,3 +148,9 @@ Root cause fixed: StandbysView was rendering rows={standbys} (unfiltered) while 
 Patch applied: StandbysView now receives rows={viewRows} so the displayed list matches the active filter/search state.
 Stability guard added: Drill-down state now auto-resets if filters remove the selected person; inGroupDetail is based on selectedGroup to avoid “hidden header / stuck” UI.
 No FiltersBar changes needed: filter toggle/panel logic was already working correctly.
+### Fixed mismatched settlement workflow
+Restored name-mismatch barrier in Add Standby settlement flow – warning now triggers when settling against an existing shift with a different name.
+User must resolve mismatch before saving (same person/typo, 3-way standby, or other with note), preventing accidental incorrect settlements.
+Parity with Detail modal restored – Add flow now mirrors the proven settlement guard logic.
+Safe commit behaviour – renames and notes only apply on Save, no side effects on cancel.
+Improved UX for blanks – selecting a settle target auto-fills the name when empty.
